@@ -20,6 +20,9 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -90,8 +93,15 @@ class KioskLauncherActivity : ComponentActivity() {
         }
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Dialogs (exit PIN) and the transient swipe bring the bar back; hide it again once we are on top.
+        if (hasFocus) applyNavBar(active)
+    }
+
     override fun onResume() {
         super.onResume()
+        applyNavBar(active)
         // A single-app pin that returned us to HOME means the pinned app exited or crashed — re-pin
         // it (counting the bounce so a crash loop trips the guard). Enter/exit transitions are
         // handled by the flow collector, not here.
@@ -107,6 +117,7 @@ class KioskLauncherActivity : ComponentActivity() {
     private fun applyState(p: KioskApplyPayload?) {
         val previous = active
         active = p
+        applyNavBar(p)
         if (p == null) {
             holding = false
             stopLockTaskSafely()
@@ -160,6 +171,17 @@ class KioskLauncherActivity : ComponentActivity() {
         runCatching {
             val am = getSystemService(ActivityManager::class.java)
             if (am?.lockTaskModeState != android.app.ActivityManager.LOCK_TASK_MODE_NONE) stopLockTask()
+        }
+    }
+
+    /** Hide the navigation bar while the kiosk asks for it ([com.mdmesh.proto.KioskFeaturesDto.hideNavBar]). */
+    private fun applyNavBar(p: KioskApplyPayload?) {
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        if (p?.features?.hideNavBar == true) {
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.navigationBars())
+        } else {
+            controller.show(WindowInsetsCompat.Type.navigationBars())
         }
     }
 

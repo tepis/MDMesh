@@ -255,6 +255,7 @@ const LAYOUT: Record<'kiosk' | 'network' | 'security' | 'enrollment', Item[]> = 
     'kioskKeyguard',
     'kioskLockButtons',
     'kioskLockVolume',
+    'kioskHideNavBar',
     { eyebrow: 'Leaving kiosk mode', kiosk: true },
     'kioskExit',
     'password',

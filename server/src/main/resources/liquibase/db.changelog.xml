@@ -3059,4 +3059,11 @@
         <rollback>ALTER TABLE device_state DROP COLUMN appsRevision;</rollback>
     </changeSet>
 
+    <changeSet id="26.11.06-configurations-kioskHideNavBar" author="mdm" context="common">
+        <comment>Column,new: configurations#kioskHideNavBar (sent as kiosk.features.hideNavBar: the kiosk launcher hides
+            the navigation bar, immersive). No DEFAULT: NULL = off, so existing configurations keep their revision.</comment>
+        <sql>ALTER TABLE configurations ADD COLUMN kioskHideNavBar BOOLEAN;</sql>
+        <rollback>ALTER TABLE configurations DROP COLUMN kioskHideNavBar;</rollback>
+    </changeSet>
+
 </databaseChangeLog>

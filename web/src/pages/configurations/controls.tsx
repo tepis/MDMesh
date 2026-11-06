@@ -46,6 +46,7 @@ const FLAG_UI: Record<string, { labels: [string, string]; falseFirst?: boolean }
   kioskSystemInfo: { labels: ['Show', 'Hide'] },
   kioskLockButtons: 'toggle',
   kioskLockVolume: 'toggle',
+  kioskHideNavBar: 'toggle',
 };
 
 /** Enums shown as a segmented control in the main editor; others are selects. */

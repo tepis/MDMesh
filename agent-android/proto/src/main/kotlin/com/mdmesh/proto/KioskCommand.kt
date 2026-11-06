@@ -39,6 +39,12 @@ data class KioskFeaturesDto(
      * restriction is set, which is why this is its own opt-in rather than part of [lockButtons] (power menu only).
      */
     val lockVolume: Boolean? = null,
+    /**
+     * Hide the navigation bar on the kiosk launcher (immersive: a swipe from the edge shows it for a moment).
+     * Lock task only removes the Home/Recents buttons, never the bar itself. A pinned third-party app draws its
+     * own window, so there the bar follows that app.
+     */
+    val hideNavBar: Boolean? = null,
 )
 
 @Serializable

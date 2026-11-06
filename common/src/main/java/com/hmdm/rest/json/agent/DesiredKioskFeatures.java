@@ -42,4 +42,6 @@ public class DesiredKioskFeatures {
     private Boolean lockButtons;
     /** Protocol 1.4: block volume changes while in kiosk (the platform mutes the device meanwhile). */
     private Boolean lockVolume;
+    /** Hide the navigation bar on the kiosk launcher (immersive); older agents ignore it. */
+    private Boolean hideNavBar;
 }

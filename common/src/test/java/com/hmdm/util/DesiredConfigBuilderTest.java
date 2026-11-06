@@ -319,6 +319,19 @@ public class DesiredConfigBuilderTest {
                 build(kioskConfig(), Arrays.asList(app(5, 505, "com.acme.pos", 1))).getRevision());
     }
 
+    @Test
+    public void kiosk_hide_nav_bar_is_sent_only_when_set() {
+        assertNull(build(kioskConfig(), Collections.emptyList()).getKiosk().getFeatures().getHideNavBar());
+
+        Configuration hidden = kioskConfig(); hidden.setKioskHideNavBar(true);
+        DesiredConfig d = build(hidden, Collections.emptyList());
+        assertEquals(Boolean.TRUE, d.getKiosk().getFeatures().getHideNavBar());
+        assertTrue(DesiredConfigBuilder.canonicalJson(d).contains("\"hideNavBar\":true"));
+        // A NULL column (every existing configuration) keeps the golden revision.
+        assertEquals(resource("desired-config-kiosk.sha256"),
+                build(kioskConfig(), Arrays.asList(app(5, 505, "com.acme.pos", 1))).getRevision());
+    }
+
     /** GOLDEN for the flat policy block. Kept separate from the kiosk fixture so an unmanaged
      *  disableFactoryReset there still proves the key is omitted. Update deliberately. */
     @Test
