@@ -39,7 +39,10 @@ rand() { mdm_rand; }
 # The value is escaped for the sed replacement (\ # &), so any value is written as given.
 setenv() {
   local v=${2//\\/\\\\}; v=${v//#/\\#}; v=${v//&/\\&}
-  if grep -q "^$1=" .env 2>/dev/null; then sed -i "s#^$1=.*#$1=$v#" .env; else printf '%s=%s\n' "$1" "$2" >> .env; fi
+  # Not sed -i: GNU and BSD (macOS) sed take its argument differently. Rewriting in place keeps .env's mode and owner.
+  if grep -q "^$1=" .env 2>/dev/null; then
+    local out; out=$(sed "s#^$1=.*#$1=$v#" .env) && printf '%s\n' "$out" > .env
+  else printf '%s=%s\n' "$1" "$2" >> .env; fi
 }
 
 RESET=0; ALLOW_DOWNGRADE=0
