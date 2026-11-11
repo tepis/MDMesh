@@ -95,6 +95,30 @@ describe('the Apps tab', () => {
     expect(posts.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([{ type: 'apps.scan' }]);
   });
 
+  it('Uninstall asks first, then queues app.uninstall; not offered for system apps or the agent', async () => {
+    const withAgent = [...APPS, { pkg: 'com.mdmesh.agent', label: 'MDMesh' }];
+    const fetch = openApps({ history: [scan(9, 'done', withAgent)] });
+    await within(await screen.findByRole('tabpanel', undefined, LOAD)).findByRole('table', undefined, LOAD);
+    fireEvent.click(within(panel()).getByRole('checkbox', { name: 'Show system apps' }));
+    expect(within(panel()).queryByRole('button', { name: 'Uninstall Settings' })).toBeNull();
+    expect(within(panel()).queryByRole('button', { name: 'Uninstall MDMesh' })).toBeNull();
+
+    fireEvent.click(within(panel()).getByRole('button', { name: 'Uninstall Scanner' }));
+    const dialog = within(await screen.findByRole('alertdialog', { name: 'Uninstall Scanner?' }, LOAD));
+    fireEvent.click(dialog.getByRole('button', { name: 'Uninstall' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull(), LOAD);
+    const posts = fetch.mock.calls.filter(([input, init]) => String(input).endsWith(`/devices/${DEVICE.number}/commands`) && init?.method === 'POST');
+    expect(posts.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
+      { type: 'app.uninstall', payload: JSON.stringify({ packageName: 'com.acme.scanner' }) },
+    ]);
+  });
+
+  it('offers no Uninstall to a role without edit_devices', async () => {
+    openApps({ user: ROLES.observer, history: [scan(9, 'done', APPS)] });
+    await within(await screen.findByRole('tabpanel', undefined, LOAD)).findByRole('table', undefined, LOAD);
+    expect(within(panel()).queryByRole('button', { name: 'Uninstall Scanner' })).toBeNull();
+  });
+
   it('Scan now shows why the device gave no list', async () => {
     openApps({ answer: scan(42, 'failed', undefined, 'Scan refused') });
     fireEvent.click(await screen.findByRole('button', { name: 'Scan now' }, LOAD));

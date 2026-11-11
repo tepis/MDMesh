@@ -73,6 +73,7 @@ import com.mdmesh.oem.KnoxAdapter
 import com.mdmesh.oem.OemAdapter
 import com.mdmesh.policy.CapabilityRegistry
 import com.mdmesh.policy.wifi.AndroidWifiRadio
+import com.mdmesh.agent.display.ScreenBrightness
 import com.mdmesh.policy.wifi.DpmHandle
 import com.mdmesh.policy.wifi.SharedPrefsWifiRadioOffState
 import com.mdmesh.remote.RemoteControlTierDetector
@@ -351,13 +352,24 @@ object AgentModule {
 
     @Provides
     @Singleton
+    fun provideScreenBrightness(handle: DpmHandle, @ApplicationContext context: Context): ScreenBrightness =
+        ScreenBrightness(handle, context.packageName)
+
+    @Provides
+    @Singleton
+    @Suppress("LongParameterList") // one dependency per config.apply section
     fun provideConfigApplier(
         registry: CapabilityRegistry,
         kiosk: KioskApplier,
         location: LocationModeStore,
         store: ConfigStateStore,
         power: PowerModeStore,
-    ): ConfigApplier = ConfigApplier(registry::togglePolicies, kiosk, location::set, store, setPowerMode = power::set)
+        brightness: ScreenBrightness,
+    ): ConfigApplier = ConfigApplier(
+        registry::togglePolicies, kiosk, location::set, store,
+        setPowerMode = power::set,
+        setDisplay = brightness::apply,
+    )
 
     @Provides
     @IntoSet

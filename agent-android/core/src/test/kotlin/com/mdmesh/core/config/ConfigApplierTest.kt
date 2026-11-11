@@ -19,6 +19,7 @@ import com.mdmesh.policy.wifi.WifiRadio
 import com.mdmesh.policy.wifi.WifiRadioPolicy
 import com.mdmesh.proto.ConfigApplyPayload
 import com.mdmesh.proto.ConfigConnectivity
+import com.mdmesh.proto.ConfigDisplay
 import com.mdmesh.proto.ConfigLocation
 import com.mdmesh.proto.ConfigOutcome
 import com.mdmesh.proto.KioskApplyPayload
@@ -389,6 +390,27 @@ class ConfigApplierTest {
             .reapplyPersisted()
         assertEquals(ConfigOutcome.APPLIED, r?.outcomes?.get("connectivity"))
         assertEquals(listOf("alwaysOn"), modes)
+    }
+
+    @Test fun `display sets the brightness, absent leaves it, and a device that can't reports unsupported`() = runTest {
+        val store = InMemoryConfigStateStore(); val set = mutableListOf<ConfigDisplay>()
+        val applier = ConfigApplier(
+            fixedToggles(), kiosk(FakeController()), {}, store, setPowerMode = {}, setDisplay = { set += it; true },
+        )
+        val r = applier.apply(ConfigApplyPayload(revision = "d1", display = ConfigDisplay(brightness = 120)))
+        assertEquals(mapOf("display" to ConfigOutcome.APPLIED), r.outcomes)
+        assertEquals(listOf(ConfigDisplay(autoBrightness = false, brightness = 120)), set)
+        assertEquals("d1", store.revision())
+
+        val unmanaged = applier.apply(ConfigApplyPayload(revision = "d2"))
+        assertFalse(unmanaged.outcomes.containsKey("display"))
+        assertEquals(1, set.size)
+
+        val cannot = ConfigApplier(
+            fixedToggles(), kiosk(FakeController()), {}, InMemoryConfigStateStore(), setPowerMode = {},
+            setDisplay = { false },
+        ).apply(ConfigApplyPayload(revision = "d3", display = ConfigDisplay(autoBrightness = true)))
+        assertEquals(ConfigOutcome.UNSUPPORTED, cannot.outcomes["display"])
     }
 
     @Test fun `an unknown connectivity mode is unsupported, not set as Battery-saver`() = runTest {

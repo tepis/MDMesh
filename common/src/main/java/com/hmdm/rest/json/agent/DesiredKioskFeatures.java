@@ -44,4 +44,6 @@ public class DesiredKioskFeatures {
     private Boolean lockVolume;
     /** Hide the navigation bar on the kiosk launcher (immersive); older agents ignore it. */
     private Boolean hideNavBar;
+    /** Swallow Back in kiosk (the agent's accessibility service must be enabled); older agents ignore it. */
+    private Boolean blockBack;
 }

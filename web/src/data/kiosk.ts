@@ -43,6 +43,7 @@ export interface KioskPayload {
     lockButtons?: boolean;
     lockVolume?: boolean;
     hideNavBar?: boolean;
+    blockBack?: boolean;
   };
   exitMode: KioskChoice['exitMode'];
   password?: string;
@@ -125,6 +126,7 @@ export function configuredKiosk(cfg: Configuration, apps: ConfigApp[]): Configur
   feature('lockButtons', 'kioskLockButtons');
   feature('lockVolume', 'kioskLockVolume');
   feature('hideNavBar', 'kioskHideNavBar');
+  feature('blockBack', 'kioskBlockBack');
   const payload: KioskPayload = {
     mode: mainPkg && allowed.length === 1 ? 'single' : 'launcher',
     allowedPackages: allowed,

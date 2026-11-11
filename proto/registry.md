@@ -87,10 +87,10 @@ string, except `configApply`.
 | `config.apply` | `device.configApply` | desired-state document, see `payloads/config-apply.schema.json`; result detail is `payloads/config-apply-result.schema.json`; the `connectivity` section (1.5) sets the same modes as `device.powerMode` for a whole configuration |
 | `policy.apply` | `policy.<key>` (e.g. `policy.wifi`) | `{ policy: "wifi", value: false }` |
 | `app.install` | `app.silentInstall` | `{ url, packageName, versionCode, sha256, runAfterInstall }`, or `parts: [{ url, sha256 }]` instead of `url`/`sha256` for a split APK; `sha256` (hex) is required while the check-in says `installIntegrity: "required"` (1.3) |
-| `app.uninstall` | — | `{ packageName }`; no console or server sender yet |
+| `app.uninstall` | — | `{ packageName }`; sent from the console (device Apps tab, Apps library → Uninstall) |
 | `apps.scan` | — | none; result detail is `{ apps: [...] }` |
 | `apps.icons` | — | `{ packages: [...] }`; result detail is `{ icons: [{ pkg, pngBase64 }] }` |
-| `kiosk.enter` | — | `{ mode, allowedPackages, pinPackage, features, exitMode, password, theme }` (`KioskApplyPayload`); `features.lockButtons` blocks the power menu, `features.lockVolume` (1.4) blocks volume changes and mutes while in kiosk, `features.hideNavBar` hides the navigation bar on the kiosk launcher |
+| `kiosk.enter` | — | `{ mode, allowedPackages, pinPackage, features, exitMode, password, theme }` (`KioskApplyPayload`); `features.lockButtons` blocks the power menu, `features.lockVolume` (1.4) blocks volume changes and mutes while in kiosk, `features.hideNavBar` hides the navigation bar on the kiosk launcher, `features.blockBack` swallows Back (accessibility service) |
 | `kiosk.exit` | — | none |
 | `device.lock` | `device.lock` | none |
 | `device.reboot` | `device.reboot` | none (DO) |

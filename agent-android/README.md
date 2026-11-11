@@ -85,6 +85,22 @@ adb shell dumpsys device_policy | grep -i "Device Owner"
 If `set-device-owner` fails with "Not allowed to set the device owner because
 there are already some accounts" — remove all accounts, or factory reset.
 
+### Kiosk Back filter (`features.blockBack`)
+
+A configuration's **Block Back button** is carried out by the agent's accessibility service
+`KioskBackBlockService`, which only filters key events. Android lets no app enable an accessibility
+service by itself, so enable it once per device (it survives reboots and agent updates):
+
+```bash
+# release build; for a debug build use com.mdmesh.agent.debug as the package
+adb shell settings put secure enabled_accessibility_services \
+  com.mdmesh.agent/com.mdmesh.agent.kiosk.KioskBackBlockService
+adb shell settings put secure accessibility_enabled 1
+```
+
+This replaces any other enabled accessibility service list. It catches the three-button navigation
+bar and hardware Back keys, not the back swipe of gesture navigation.
+
 ### Getting OFF Device Owner (dev cycle)
 
 A Device Owner cannot simply be uninstalled. To clear it:

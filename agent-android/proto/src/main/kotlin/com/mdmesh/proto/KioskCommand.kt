@@ -45,6 +45,11 @@ data class KioskFeaturesDto(
      * own window, so there the bar follows that app.
      */
     val hideNavBar: Boolean? = null,
+    /**
+     * Swallow Back while in kiosk (three-button navigation bar and hardware keys), so it can't close the pinned app.
+     * Needs the agent's accessibility service enabled on the device; the back swipe of gesture navigation isn't caught.
+     */
+    val blockBack: Boolean? = null,
 )
 
 @Serializable

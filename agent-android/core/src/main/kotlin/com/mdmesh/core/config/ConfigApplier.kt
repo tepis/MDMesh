@@ -10,6 +10,8 @@ import com.mdmesh.policy.safeboot.SafeBootPolicy
 import com.mdmesh.policy.wifi.WifiRadioPolicy
 import com.mdmesh.proto.ConfigApplyPayload
 import com.mdmesh.proto.ConfigApplyResult
+import com.mdmesh.proto.ConfigConnectivity
+import com.mdmesh.proto.ConfigDisplay
 import com.mdmesh.proto.ConfigOutcome
 import com.mdmesh.proto.DeviceAction
 import kotlinx.coroutines.sync.Mutex
@@ -33,6 +35,8 @@ import kotlinx.coroutines.sync.withLock
  *   never unsupported, so the document is not saved and the server re-sends it; it is never applied or released.
  * @param setPowerMode sets the live-connection mode for the `connectivity` section (1.5), as `device.powerMode` does.
  *   Only called with a mode this agent knows; another one is reported unsupported.
+ * @param setDisplay sets the screen brightness for the `display` section; false when this device can't (not Device
+ *   Owner, or below Android 9), which is reported unsupported.
  */
 class ConfigApplier(
     private val toggles: () -> ResolvedToggles,
@@ -40,6 +44,7 @@ class ConfigApplier(
     private val setLocationMode: (String) -> Unit,
     private val store: ConfigStateStore,
     private val setPowerMode: (String) -> Unit,
+    private val setDisplay: (ConfigDisplay) -> Boolean = { false },
 ) {
     private val mutex = Mutex()
 
@@ -121,15 +126,9 @@ class ConfigApplier(
                 .getOrElse { ConfigOutcome.failed(it.message ?: "location mode") }
         }
         // Absent = not managed: the device keeps its mode, including one set by a device.powerMode command.
-        doc.connectivity?.let { c ->
-            // A mode from a newer server is not set as Battery-saver: unsupported, like a policy key this agent lacks.
-            outcomes[CONNECTIVITY] = if (c.mode !in POWER_MODES) {
-                ConfigOutcome.UNSUPPORTED
-            } else {
-                runCatching { setPowerMode(c.mode); ConfigOutcome.APPLIED }
-                    .getOrElse { ConfigOutcome.failed(it.message ?: "connectivity mode") }
-            }
-        }
+        doc.connectivity?.let { outcomes[CONNECTIVITY] = connectivityOutcome(it, setPowerMode) }
+        // Absent = not managed: the device keeps the brightness it has.
+        doc.display?.let { outcomes[DISPLAY] = displayOutcome(it, setDisplay) }
         val result = ConfigApplyResult(doc.revision, outcomes)
         if (persist && succeeded(result)) store.save(doc)
         return result
@@ -213,7 +212,7 @@ class ConfigApplier(
         private const val POLICIES = "policies."
         private const val KIOSK = "kiosk"
         private const val CONNECTIVITY = "connectivity"
-        private val POWER_MODES = setOf(DeviceAction.POWER_ADAPTIVE, DeviceAction.POWER_ALWAYS_ON)
+        private const val DISPLAY = "display"
 
         /** Never a real revision (config.apply requires a non-blank one). */
         private const val NO_REVISION = ""
@@ -221,6 +220,21 @@ class ConfigApplier(
         fun succeeded(r: ConfigApplyResult): Boolean = r.outcomes.values.none(ConfigOutcome::isFailed)
     }
 }
+
+private val POWER_MODES = setOf(DeviceAction.POWER_ADAPTIVE, DeviceAction.POWER_ALWAYS_ON)
+
+/** A mode from a newer server is not set as Battery-saver: unsupported, like a policy key this agent lacks. */
+private fun connectivityOutcome(c: ConfigConnectivity, setPowerMode: (String) -> Unit): String =
+    if (c.mode !in POWER_MODES) {
+        ConfigOutcome.UNSUPPORTED
+    } else {
+        runCatching { setPowerMode(c.mode); ConfigOutcome.APPLIED }
+            .getOrElse { ConfigOutcome.failed(it.message ?: "connectivity mode") }
+    }
+
+private fun displayOutcome(d: ConfigDisplay, setDisplay: (ConfigDisplay) -> Boolean): String =
+    runCatching { if (setDisplay(d)) ConfigOutcome.APPLIED else ConfigOutcome.UNSUPPORTED }
+        .getOrElse { ConfigOutcome.failed(it.message ?: "brightness") }
 
 private fun toOutcome(o: PolicyOutcome?): String = when (o) {
     null, PolicyOutcome.Unsupported -> ConfigOutcome.UNSUPPORTED

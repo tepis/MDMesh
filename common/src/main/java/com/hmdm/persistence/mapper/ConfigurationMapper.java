@@ -143,6 +143,7 @@ public interface ConfigurationMapper {
             "wifiRadio=#{wifiRadio}, " +
             "kioskLockVolume=#{kioskLockVolume}, " +
             "kioskHideNavBar=#{kioskHideNavBar}, " +
+            "kioskBlockBack=#{kioskBlockBack}, " +
             "connectivityMode=#{connectivityMode}, " +
             // Left out (null), the stored extensions stay: a client that doesn't know them can't wipe them.
             "extensions=COALESCE(CAST(#{extensions} AS jsonb), extensions) " +

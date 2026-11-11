@@ -126,6 +126,8 @@ public class Configuration implements CustomerData, Serializable {
     private Boolean kioskLockVolume;
     @ApiModelProperty("Hide the navigation bar on the kiosk launcher (immersive); sent as kiosk.features.hideNavBar")
     private Boolean kioskHideNavBar;
+    @ApiModelProperty("Block Back in kiosk (needs the agent's accessibility service); sent as kiosk.features.blockBack")
+    private Boolean kioskBlockBack;
     @ApiModelProperty("Wi-Fi radio: null = not managed, true = turn on, false = turn off (sent as policies.wifiRadio)")
     private Boolean wifiRadio;
     @ApiModelProperty("Agent connectivity: null = not managed, adaptive = battery-saver, alwaysOn = always connected (connectivity.mode)")
@@ -930,6 +932,14 @@ public class Configuration implements CustomerData, Serializable {
         this.kioskHideNavBar = kioskHideNavBar;
     }
 
+    public Boolean getKioskBlockBack() {
+        return kioskBlockBack;
+    }
+
+    public void setKioskBlockBack(Boolean kioskBlockBack) {
+        this.kioskBlockBack = kioskBlockBack;
+    }
+
     public Boolean getWifiRadio() {
         return wifiRadio;
     }
@@ -1040,6 +1050,7 @@ public class Configuration implements CustomerData, Serializable {
         copy.setDisableSafeBoot(getDisableSafeBoot());
         copy.setKioskLockVolume(getKioskLockVolume());
         copy.setKioskHideNavBar(getKioskHideNavBar());
+        copy.setKioskBlockBack(getKioskBlockBack());
         copy.setWifiRadio(getWifiRadio());
         copy.setConnectivityMode(getConnectivityMode());
         copy.setExtensions(getExtensions() == null ? null : getExtensions().deepCopy());

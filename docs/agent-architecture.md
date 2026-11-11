@@ -61,7 +61,7 @@ configuration; an ad-hoc "Custom kiosk" from the console is left alone. After so
 
 | Area | Fields |
 |------|--------|
-| Kiosk | `mainAppId`, `kioskMode`, `kioskExit`, `kioskHome`, `kioskRecents`, `kioskNotifications`, `kioskSystemInfo`, `kioskKeyguard`, `kioskLockButtons`, `kioskLockVolume`, `kioskHideNavBar`, `password` (exit PIN, stored as entered) |
+| Kiosk | `mainAppId`, `kioskMode`, `kioskExit`, `kioskHome`, `kioskRecents`, `kioskNotifications`, `kioskSystemInfo`, `kioskKeyguard`, `kioskLockButtons`, `kioskLockVolume`, `kioskHideNavBar`, `kioskBlockBack`, `password` (exit PIN, stored as entered) |
 | Launcher look | `backgroundColor`, `textColor`, `iconSize` |
 | Device policy | `wifi`, `wifiRadio`, `bluetooth`, `usbStorage`, `disableScreenshots`, `disableFactoryReset`, `disableSafeBoot` |
 | Location | `requestUpdates` (location capture mode) |

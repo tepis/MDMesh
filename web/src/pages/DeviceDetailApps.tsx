@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import type { CommandHistoryItem, QueueCommandRequest } from '../api/commands';
+import { isAgentPackage, type CommandHistoryItem, type QueueCommandRequest } from '../api/commands';
 import type { AppInfo } from '../api/deviceApps';
 import {
   Button,
@@ -11,7 +11,9 @@ import {
   IconApps,
   IconDownload,
   IconSync,
+  IconTrash,
   IconWarning,
+  Modal,
   RelativeTime,
   SearchInput,
   Table,
@@ -112,25 +114,61 @@ function downloadCsv(name: string, text: string) {
   URL.revokeObjectURL(url);
 }
 
+/** A user app other than the agent itself: the ones Uninstall is offered for. */
+const uninstallable = (a: AppInfo) => !a.system && !isAgentPackage(a.pkg);
+
 /**
  * The device's installed apps from its latest apps.scan in the polled history: the apps with a launcher icon, as the
  * agent reports them. Scan now (`scan`, only for a role with edit_devices) asks the device again; Export CSV writes
- * every app, system ones included, for app audits.
+ * every app, system ones included, for app audits. Uninstall (`uninstall`, edit_devices too) queues app.uninstall
+ * for a user app after a confirmation.
  */
 export function AppsTab({
   number,
   history,
   loaded,
   scan,
+  uninstall,
 }: {
   number: string;
   history: readonly CommandHistoryItem[];
   loaded: boolean;
   scan?: AppScanState;
+  /** Queue app.uninstall for the app; resolves to whether it was queued. */
+  uninstall?: (app: AppInfo) => Promise<boolean>;
 }) {
   const titleId = useId();
   const [query, setQuery] = useState('');
   const [showSystem, setShowSystem] = useState(false);
+  const [confirm, setConfirm] = useState<AppInfo | null>(null);
+  const [removing, setRemoving] = useState(false);
+  const columns: ReadonlyArray<Column<AppInfo>> = uninstall
+    ? [
+        ...COLUMNS,
+        {
+          key: 'actions',
+          header: 'Actions',
+          headerHidden: true,
+          shrink: true,
+          cell: (a) =>
+            uninstallable(a) ? (
+              <Button size="xs" icon={<IconTrash size={14} />} aria-label={`Uninstall ${a.label}`} onClick={() => setConfirm(a)}>
+                Uninstall
+              </Button>
+            ) : null,
+        },
+      ]
+    : COLUMNS;
+
+  async function confirmUninstall() {
+    if (!confirm || !uninstall) return;
+    setRemoving(true);
+    try {
+      if (await uninstall(confirm)) setConfirm(null);
+    } finally {
+      setRemoving(false);
+    }
+  }
   const latest = useMemo(() => latestScan(history), [history]);
   const all = useMemo(() => [...(latest?.apps ?? [])].sort(byLabel), [latest]);
   const shown = filterApps(all, query, showSystem);
@@ -221,7 +259,7 @@ export function AppsTab({
       ) : (
         <Table
           aria-label="Installed apps"
-          columns={COLUMNS}
+          columns={columns}
           rows={shown}
           rowKey={(a) => a.pkg}
           edge={24}
@@ -229,6 +267,29 @@ export function AppsTab({
           empty={`No apps match.${systemHidden ? ' System apps are hidden.' : ''}`}
         />
       )}
+      <Modal
+        open={confirm !== null}
+        onClose={() => !removing && setConfirm(null)}
+        role="alertdialog"
+        size="sm"
+        title={confirm ? `Uninstall ${confirm.label}?` : ''}
+        description={confirm ? <span className="v2-mono">{confirm.pkg}</span> : undefined}
+        footer={
+          <>
+            <Button size="lg" onClick={() => setConfirm(null)} disabled={removing}>
+              Cancel
+            </Button>
+            <Button size="lg" variant="danger" disabled={removing} onClick={() => void confirmUninstall()}>
+              {removing ? 'Uninstalling…' : 'Uninstall'}
+            </Button>
+          </>
+        }
+      >
+        <p className="v2-device-meta">
+          The device removes the app and its data without asking (agent as Device Owner). If the device’s configuration
+          still installs this app, remove it there too, or the device can get it back.
+        </p>
+      </Modal>
     </Card>
   );
 }

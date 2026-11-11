@@ -8,6 +8,7 @@ import com.hmdm.persistence.domain.Configuration;
 import com.hmdm.persistence.domain.RequestUpdatesType;
 import com.hmdm.rest.json.agent.DesiredConfig;
 import com.hmdm.rest.json.agent.DesiredConnectivity;
+import com.hmdm.rest.json.agent.DesiredDisplay;
 import com.hmdm.rest.json.agent.DesiredKiosk;
 import com.hmdm.rest.json.agent.DesiredKioskFeatures;
 import com.hmdm.rest.json.agent.DesiredKioskTheme;
@@ -77,6 +78,7 @@ public final class DesiredConfigBuilder {
             c.setMode(connectivity);
             d.setConnectivity(c);
         }
+        d.setDisplay(display(cfg));
         // Last, once core's sections are built from cfg, so a contributor can't change them.
         contribute(policies, cfg, Collections.unmodifiableList(appList), contributors);
         d.setRevision(revision(d));
@@ -90,6 +92,21 @@ public final class DesiredConfigBuilder {
     public static String connectivityMode(String mode) {
         if (CONNECTIVITY_ADAPTIVE.equals(mode) || CONNECTIVITY_ALWAYS_ON.equals(mode)) return mode;
         return null;
+    }
+
+    /**
+     * The configuration's screen brightness, or null when {@code autoBrightness} is NULL (not managed, every existing
+     * row): the section is then left out, so the document and its revision stay as they were. Manual brightness is
+     * sent clamped to 0-255, and only when the configuration sets one.
+     */
+    static DesiredDisplay display(Configuration cfg) {
+        if (cfg.getAutoBrightness() == null) return null;
+        DesiredDisplay d = new DesiredDisplay();
+        d.setAutoBrightness(cfg.getAutoBrightness());
+        if (!cfg.getAutoBrightness() && cfg.getBrightness() != null) {
+            d.setBrightness(Math.max(0, Math.min(255, cfg.getBrightness())));
+        }
+        return d;
     }
 
     /**
@@ -239,6 +256,7 @@ public final class DesiredConfigBuilder {
         // kiosks must not start muting on upgrade. Null (all existing rows) is dropped from the canonical JSON.
         f.setLockVolume(cfg.getKioskLockVolume());
         f.setHideNavBar(cfg.getKioskHideNavBar());
+        f.setBlockBack(cfg.getKioskBlockBack());
         k.setFeatures(f);
         k.setExitMode(Boolean.TRUE.equals(cfg.getKioskExit()) ? "visible" : "gesture");
         k.setPassword(cfg.getPassword());

@@ -5,4 +5,6 @@
     <string name="checkin_notification_channel">Device management</string>
     <string name="checkin_notification_title">Device management active</string>
     <string name="checkin_notification_text">Keeping this device in sync with your organisation.</string>
+    <string name="kiosk_back_block_label">MDM kiosk: block Back</string>
+    <string name="kiosk_back_block_description">Blocks the Back button while this managed device is in kiosk mode and its configuration asks for it. Reads no screen content.</string>
 </resources>

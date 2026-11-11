@@ -284,3 +284,19 @@ export async function installApp(
 ): Promise<QueuedCommand> {
   return queueCommand(deviceId, buildInstallCommand(spec));
 }
+
+/** The agent's own packages (release and debug builds): uninstalling the agent would cut the device off. */
+export const isAgentPackage = (pkg: string): boolean => pkg === 'com.mdmesh.agent' || pkg.startsWith('com.mdmesh.agent.');
+
+/**
+ * Build the agent-v1 `app.uninstall` command request. No requiresCapability: agents carry the handler but don't
+ * advertise `app.silentUninstall` yet, and a gate token nobody advertises would hold the command forever.
+ */
+export function buildUninstallCommand(packageName: string): QueueCommandRequest {
+  return { type: 'app.uninstall', payload: JSON.stringify({ packageName }) };
+}
+
+/** Queue an `app.uninstall` for a device (silent, as Device Owner). */
+export async function uninstallApp(deviceId: number | string, packageName: string): Promise<QueuedCommand> {
+  return queueCommand(deviceId, buildUninstallCommand(packageName));
+}

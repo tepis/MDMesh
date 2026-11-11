@@ -233,6 +233,7 @@ function sectionOf(f: FieldDef): SectionId {
       return 'network';
     case 'Restrictions':
     case 'Security':
+    case 'Display':
       return 'security';
     case 'Enrollment':
       return 'enrollment';
@@ -256,6 +257,7 @@ const LAYOUT: Record<'kiosk' | 'network' | 'security' | 'enrollment', Item[]> = 
     'kioskLockButtons',
     'kioskLockVolume',
     'kioskHideNavBar',
+    'kioskBlockBack',
     { eyebrow: 'Leaving kiosk mode', kiosk: true },
     'kioskExit',
     'password',
@@ -265,7 +267,15 @@ const LAYOUT: Record<'kiosk' | 'network' | 'security' | 'enrollment', Item[]> = 
     'iconSize',
   ],
   network: ['wifi', 'wifiRadio', 'bluetooth', 'requestUpdates', 'connectivityMode'],
-  security: ['usbStorage', 'disableScreenshots', 'disableFactoryReset', 'disableSafeBoot'],
+  security: [
+    'usbStorage',
+    'disableScreenshots',
+    'disableFactoryReset',
+    'disableSafeBoot',
+    { eyebrow: 'Screen' },
+    'autoBrightness',
+    'brightness',
+  ],
   enrollment: ['wifiSSID', 'wifiPassword', 'wifiSecurityType'],
 };
 for (const [sec, items] of Object.entries(LAYOUT) as Array<[keyof typeof LAYOUT, Item[]]>) {

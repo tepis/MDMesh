@@ -13,6 +13,7 @@ import kotlinx.serialization.Serializable
  * @property location capture cadence (`passive`, `active`, or `off` since 1.4), see [DeviceAction.LOCATION_MODE].
  * @property connectivity (1.5) present = set the live-connection mode (`adaptive` or `alwaysOn`), the same modes as
  *   [DeviceAction.POWER_MODE]; absent = not managed, the device keeps its mode.
+ * @property display present = set the screen brightness; absent = not managed, the device keeps what it has.
  */
 @Serializable
 data class ConfigApplyPayload(
@@ -22,7 +23,14 @@ data class ConfigApplyPayload(
     val kiosk: KioskApplyPayload? = null,
     val location: ConfigLocation? = null,
     val connectivity: ConfigConnectivity? = null,
+    val display: ConfigDisplay? = null,
 )
+
+/**
+ * Screen brightness: [autoBrightness] true = adaptive brightness; false = manual, at [brightness] (0–255) when given.
+ */
+@Serializable
+data class ConfigDisplay(val autoBrightness: Boolean = false, val brightness: Int? = null)
 
 @Serializable
 data class ConfigLocation(val mode: String = DeviceAction.LOCATION_PASSIVE)
@@ -34,7 +42,7 @@ data class ConfigConnectivity(val mode: String = DeviceAction.POWER_ADAPTIVE)
 @Serializable
 data class ConfigApplyResult(
     val revision: String,
-    /** keys: `policies.<key>`, `kiosk`, `location`, `connectivity` → [ConfigOutcome] strings. */
+    /** keys: `policies.<key>`, `kiosk`, `location`, `connectivity`, `display` → [ConfigOutcome] strings. */
     val outcomes: Map<String, String>,
 )
 

@@ -2,8 +2,8 @@
 <!--
     Base app manifest. PERMISSION MINIMIZATION (Play Protect):
       * NO READ_SMS, NO QUERY_ALL_PACKAGES.
-      * NO accessibility (that lives ONLY in :remote and merges in for builds
-        that include it).
+      * Accessibility only as the kiosk's Back filter (KioskBackBlockService: key events, no
+        window content), off until enabled with adb; input injection lives ONLY in :remote.
       * Package visibility is scoped via <queries>, not a blanket query-all.
     Identity is the server-issued device id; we never request phone-state / IMEI.
 -->
@@ -143,6 +143,21 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Device Owner MDM agent: maintains the management command channel (check-in + push socket) so the organization can administer this dedicated device." />
+        </service>
+
+        <!-- Kiosk Back filter (features.blockBack). Bound only by the system once enabled in
+             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES (adb), never by another app. -->
+        <service
+            android:name=".kiosk.KioskBackBlockService"
+            android:exported="true"
+            android:label="@string/kiosk_back_block_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/kiosk_back_block_service" />
         </service>
 
         <!-- PackageInstaller commit results land here (explicit, non-exported). -->

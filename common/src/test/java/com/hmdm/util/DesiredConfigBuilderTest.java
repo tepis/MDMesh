@@ -323,13 +323,34 @@ public class DesiredConfigBuilderTest {
     public void kiosk_hide_nav_bar_is_sent_only_when_set() {
         assertNull(build(kioskConfig(), Collections.emptyList()).getKiosk().getFeatures().getHideNavBar());
 
-        Configuration hidden = kioskConfig(); hidden.setKioskHideNavBar(true);
+        Configuration hidden = kioskConfig(); hidden.setKioskHideNavBar(true); hidden.setKioskBlockBack(true);
         DesiredConfig d = build(hidden, Collections.emptyList());
         assertEquals(Boolean.TRUE, d.getKiosk().getFeatures().getHideNavBar());
+        assertEquals(Boolean.TRUE, d.getKiosk().getFeatures().getBlockBack());
         assertTrue(DesiredConfigBuilder.canonicalJson(d).contains("\"hideNavBar\":true"));
+        assertTrue(DesiredConfigBuilder.canonicalJson(d).contains("\"blockBack\":true"));
         // A NULL column (every existing configuration) keeps the golden revision.
         assertEquals(resource("desired-config-kiosk.sha256"),
                 build(kioskConfig(), Arrays.asList(app(5, 505, "com.acme.pos", 1))).getRevision());
+    }
+
+    @Test
+    public void display_is_sent_only_when_brightness_is_managed() {
+        Configuration unmanaged = policiesConfig();
+        unmanaged.setBrightness(180); // the column default: no mode, so not managed
+        DesiredConfig none = build(unmanaged, Collections.emptyList());
+        assertNull(none.getDisplay());
+        assertEquals(resource("desired-config-policies.sha256"), none.getRevision());
+
+        Configuration manual = policiesConfig(); manual.setAutoBrightness(false); manual.setBrightness(300);
+        DesiredConfig m = build(manual, Collections.emptyList());
+        assertEquals(Boolean.FALSE, m.getDisplay().getAutoBrightness());
+        assertEquals("clamped to 0-255", Integer.valueOf(255), m.getDisplay().getBrightness());
+
+        Configuration auto = policiesConfig(); auto.setAutoBrightness(true); auto.setBrightness(100);
+        DesiredConfig a = build(auto, Collections.emptyList());
+        assertEquals(Boolean.TRUE, a.getDisplay().getAutoBrightness());
+        assertNull("no level in auto mode", a.getDisplay().getBrightness());
     }
 
     /** GOLDEN for the flat policy block. Kept separate from the kiosk fixture so an unmanaged

@@ -7,6 +7,7 @@ import {
   type Application,
   type ApplicationVersion,
 } from '../api/applications';
+import { isAgentPackage } from '../api/commands';
 import { useAuth } from '../auth/AuthContext';
 import {
   AppTile,
@@ -20,6 +21,7 @@ import {
   IconAlert,
   IconApps,
   IconDownload,
+  IconTrash,
   IconWarning,
   Input,
   LabelledSelect,
@@ -69,6 +71,7 @@ export function AppsLibrary({
   library,
   sources,
   onDeploy,
+  onUninstall,
   deployingId,
   usedIn,
 }: {
@@ -80,6 +83,8 @@ export function AppsLibrary({
   usedIn: UsedIn;
   /** Left out for a role that may not deploy at all (neither edit_devices nor edit_applications): no Deploy. */
   onDeploy?: (app: Application) => void;
+  /** Left out for a role without edit_devices: no Uninstall. */
+  onUninstall?: (app: Application) => void;
   /** The app whose deploy subject is being resolved. */
   deployingId: number | null;
 }) {
@@ -184,8 +189,8 @@ export function AppsLibrary({
     },
   });
   const rowMenu = useRowMenu('apps', helpers);
-  // Without Deploy and any menu entry for the role, the table has no Actions column (as on Devices).
-  const hasActions = !!onDeploy || rowMenu.available;
+  // Without Deploy, Uninstall and any menu entry for the role, the table has no Actions column (as on Devices).
+  const hasActions = !!onDeploy || !!onUninstall || rowMenu.available;
 
   const actions = (a: Application) => {
     const items = rowMenu.items(a);
@@ -201,6 +206,11 @@ export function AppsLibrary({
             aria-label={`Deploy ${a.name}`}
           >
             {deployingId === a.id ? 'Opening…' : 'Deploy'}
+          </Button>
+        ) : null}
+        {onUninstall && !isAgentPackage(a.pkg) ? (
+          <Button size="xs" icon={<IconTrash size={14} />} onClick={() => onUninstall(a)} aria-label={`Uninstall ${a.name} from devices`}>
+            Uninstall
           </Button>
         ) : null}
         {items.length > 0 ? <Menu label={`More for ${a.name}`} items={items} /> : <span className="v2-apps-lib__menugap" aria-hidden="true" />}

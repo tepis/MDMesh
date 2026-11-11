@@ -51,4 +51,9 @@ public class DesiredConfig {
      * keeps the mode it has, and documents without it keep their revision.
      */
     private DesiredConnectivity connectivity;
+    /**
+     * Present = the configuration sets the screen brightness. Absent (null) = not managed: each device keeps its own,
+     * and documents without it keep their revision.
+     */
+    private DesiredDisplay display;
 }

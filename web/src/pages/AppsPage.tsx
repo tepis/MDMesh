@@ -5,6 +5,7 @@ import { IconAndroid, IconLibrary, IconUpload, LinkTabs, PageHeader, useToast } 
 import { AppsCustom } from './AppsCustom';
 import { canDeploy, resolveApp, type DeployModes, type DeploySubject } from '../data/apps';
 import { DeployModal } from '../ui/DeployModal';
+import { UninstallModal } from '../ui/UninstallModal';
 import { CORE_ACTION_ACCESS } from '../ext/core/access';
 import { usePermission } from '../ext/permissions';
 import { paths } from '../routes';
@@ -42,6 +43,7 @@ export function AppsPage() {
   const sources: Sources = { custom: canAdd || mayDeploy, fdroid: canAdd || mayDeploy };
   const source = sourceFrom(params.get('source'), sources);
   const [deploy, setDeploy] = useState<DeploySubject | null>(null);
+  const [uninstall, setUninstall] = useState<Application | null>(null);
   const [deployingId, setDeployingId] = useState<number | null>(null);
   const { usedIn, invalidate: invalidateUsedIn } = useUsedIn(library.apps, source === 'library');
   // Bumped when the source tab changes, so a Deploy still resolving on the Library tab doesn't open its dialog
@@ -118,6 +120,7 @@ export function AppsPage() {
           library={library}
           sources={sources}
           onDeploy={mayDeploy ? deployLibraryApp : undefined}
+          onUninstall={deployModes.devices ? setUninstall : undefined}
           deployingId={deployingId}
           usedIn={usedIn}
         />
@@ -139,6 +142,7 @@ export function AppsPage() {
       )}
 
       {deploy && deployOpen ? <DeployModal subject={deploy} modes={deployModes} onClose={() => setDeploy(null)} onAssigned={assigned} /> : null}
+      {uninstall && deployModes.devices ? <UninstallModal app={uninstall} onClose={() => setUninstall(null)} /> : null}
     </>
   );
 }

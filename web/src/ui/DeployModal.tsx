@@ -1,28 +1,18 @@
-import { useEffect, useId, useMemo, useState } from 'react';
-import { searchDevices, type DeviceView } from '../api/devices';
+import { useEffect, useId, useState } from 'react';
 import { listConfigurationNames, type ConfigurationSummary } from '../api/configurations';
 import { getAppConfigLinks, updateAppConfigLinks, type AppConfigLink } from '../api/applications';
 import { installApp } from '../api/commands';
 import type { DeployModes, DeploySubject } from '../data/apps';
 import { useToast } from './toast';
 import { Button } from './Button';
+import { DevicePicker } from './DevicePicker';
 import { Field } from './Field';
-import { Checkbox, SearchInput, Select } from './Input';
+import { Checkbox, Select } from './Input';
 import { Modal } from './Modal';
-import { RelativeTime } from './RelativeTime';
-import { StatusDot, type StatusTone } from './Status';
 import { TabPanel, Tabs } from './Tabs';
 import './DeployModal.css';
 
 type Mode = 'device' | 'config';
-
-/** Device check-in recency (the server's statusCode colour) as a shape-coded mark + word. */
-const PRESENCE: Record<string, { tone: StatusTone; label: string }> = {
-  green: { tone: 'ok', label: 'Online' },
-  yellow: { tone: 'idle', label: 'Idle' },
-  red: { tone: 'idle', label: 'Offline' },
-};
-const UNKNOWN = { tone: 'idle' as StatusTone, label: 'Unknown' };
 
 /**
  * Deploy dialog (classic components/DeployModal): push the app to any number of devices now, or add it to a
@@ -47,24 +37,14 @@ export function DeployModal({
   // A role refresh can take a mode away while the dialog is open: the other one shows (the page closes the dialog
   // when the role has none left).
   const mode: Mode = chosenMode === 'device' ? (modes.devices ? 'device' : 'config') : modes.configuration ? 'config' : 'device';
-  const [devices, setDevices] = useState<DeviceView[] | null>(null);
-  const [devicesError, setDevicesError] = useState(false);
   const [configs, setConfigs] = useState<Pick<ConfigurationSummary, 'id' | 'name'>[]>([]);
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const [config, setConfig] = useState('');
   const [runAfter, setRunAfter] = useState(false);
-  const [filter, setFilter] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    searchDevices({ pageSize: 1000 })
-      .then((r) => !cancelled && setDevices(r.devices?.items ?? []))
-      .catch(() => {
-        if (cancelled) return;
-        setDevices([]);
-        setDevicesError(true);
-      });
     listConfigurationNames()
       .then((l) => !cancelled && setConfigs(l ?? []))
       .catch(() => undefined);
@@ -72,35 +52,6 @@ export function DeployModal({
       cancelled = true;
     };
   }, []);
-
-  const shown = useMemo(() => {
-    const q = filter.trim().toLowerCase();
-    const list = devices ?? [];
-    if (!q) return list;
-    return list.filter((d) => `${d.number ?? ''} ${d.description ?? ''}`.toLowerCase().includes(q));
-  }, [devices, filter]);
-
-  const allShownPicked = shown.length > 0 && shown.every((d) => picked.has(d.number));
-
-  function toggle(num: string) {
-    setPicked((prev) => {
-      const next = new Set(prev);
-      if (next.has(num)) next.delete(num);
-      else next.add(num);
-      return next;
-    });
-  }
-
-  function toggleShown() {
-    setPicked((prev) => {
-      const next = new Set(prev);
-      for (const d of shown) {
-        if (allShownPicked) next.delete(d.number);
-        else next.add(d.number);
-      }
-      return next;
-    });
-  }
 
   async function pushNow() {
     if (picked.size === 0) return;
@@ -221,54 +172,11 @@ export function DeployModal({
 
         {mode === 'device' ? (
           <TabPanel idBase={idBase} tabKey="device" className="v2-deploy__panel">
-            <div className="v2-deploy__tools">
-              <SearchInput
-                className="v2-deploy__search"
-                aria-label="Filter devices"
-                placeholder="Filter devices"
-                value={filter}
-                onChange={setFilter}
-              />
-              {shown.length > 0 ? (
-                <Checkbox
-                  label={allShownPicked ? 'Clear shown' : `Select all ${shown.length} shown`}
-                  checked={allShownPicked}
-                  indeterminate={!allShownPicked && shown.some((d) => picked.has(d.number))}
-                  onChange={toggleShown}
-                />
-              ) : null}
-            </div>
-            <ul className="v2-deploy__list" aria-label="Devices">
-              {devices === null ? (
-                <li className="v2-deploy__empty">Loading devices…</li>
-              ) : shown.length === 0 ? (
-                <li className="v2-deploy__empty">
-                  {devicesError ? 'Could not load the devices.' : devices.length === 0 ? 'No devices yet.' : 'No devices match.'}
-                </li>
-              ) : (
-                shown.map((d) => {
-                  const p = (d.statusCode && PRESENCE[d.statusCode]) || UNKNOWN;
-                  return (
-                    <li key={d.id}>
-                      <label className="v2-deploy__row">
-                        <Checkbox checked={picked.has(d.number)} onChange={() => toggle(d.number)} />
-                        <StatusDot tone={p.tone} />
-                        <span className="v2-visually-hidden">{p.label}, </span>
-                        <span className="v2-deploy__num">{d.number || '—'}</span>
-                        <span className="v2-deploy__desc">{d.description}</span>
-                        <RelativeTime className="v2-deploy__seen" value={d.lastUpdate} />
-                      </label>
-                    </li>
-                  );
-                })
-              )}
-            </ul>
-            <div className="v2-deploy__foot">
-              <Checkbox label="Launch the app after install" checked={runAfter} onChange={(e) => setRunAfter(e.target.checked)} />
-              <span className="v2-deploy__count" aria-live="polite">
-                {picked.size} selected
-              </span>
-            </div>
+            <DevicePicker
+              picked={picked}
+              onChange={setPicked}
+              foot={<Checkbox label="Launch the app after install" checked={runAfter} onChange={(e) => setRunAfter(e.target.checked)} />}
+            />
           </TabPanel>
         ) : (
           <TabPanel idBase={idBase} tabKey="config" className="v2-deploy__panel">

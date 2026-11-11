@@ -3066,4 +3066,11 @@
         <rollback>ALTER TABLE configurations DROP COLUMN kioskHideNavBar;</rollback>
     </changeSet>
 
+    <changeSet id="26.11.11-configurations-kioskBlockBack" author="mdm" context="common">
+        <comment>Column,new: configurations#kioskBlockBack (sent as kiosk.features.blockBack: the agent's accessibility
+            service swallows Back in kiosk). No DEFAULT: NULL = off, so existing configurations keep their revision.</comment>
+        <sql>ALTER TABLE configurations ADD COLUMN kioskBlockBack BOOLEAN;</sql>
+        <rollback>ALTER TABLE configurations DROP COLUMN kioskBlockBack;</rollback>
+    </changeSet>
+
 </databaseChangeLog>

@@ -10,6 +10,7 @@ import {
 import { getTelemetry, type TelemetrySnapshot } from '../api/telemetry';
 import { getConfigStatus, summarizeStatus, type ConfigStatus } from '../api/configSync';
 import {
+  buildUninstallCommand,
   forceSync,
   getDeviceState,
   listCommandHistory,
@@ -947,7 +948,15 @@ export function DeviceDetailPage() {
           </>
         ),
         telemetry: <TelemetryTab telemetry={tele} loaded={teleLoaded} reportedAt={ds?.updatedAt} />,
-        apps: <AppsTab number={device.number} history={history} loaded={historyLoaded} scan={canEdit ? appScan : undefined} />,
+        apps: (
+          <AppsTab
+            number={device.number}
+            history={history}
+            loaded={historyLoaded}
+            scan={canEdit ? appScan : undefined}
+            uninstall={canEdit ? (a) => queue(`Uninstall ${a.label}`, () => buildUninstallCommand(a.pkg)) : undefined}
+          />
+        ),
         activity: (
           <ActivityTab events={events} eventsLoaded={eventsLoaded} commands={history} commandsLoaded={historyLoaded} now={now} />
         ),
