@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { searchDevices, type DeviceView } from '../api/devices';
 import { Checkbox, SearchInput } from './Input';
 import { RelativeTime } from './RelativeTime';
+import { SkeletonRows } from './Skeleton';
 import { StatusDot, type StatusTone } from './Status';
 import './DeployModal.css';
 
@@ -88,31 +89,35 @@ export function DevicePicker({
           />
         ) : null}
       </div>
-      <ul className="v2-deploy__list" aria-label="Devices">
-        {devices === null ? (
-          <li className="v2-deploy__empty">Loading devices…</li>
-        ) : shown.length === 0 ? (
-          <li className="v2-deploy__empty">
-            {devicesError ? 'Could not load the devices.' : devices.length === 0 ? 'No devices yet.' : 'No devices match.'}
-          </li>
-        ) : (
-          shown.map((d) => {
-            const p = (d.statusCode && PRESENCE[d.statusCode]) || UNKNOWN;
-            return (
-              <li key={d.id}>
-                <label className="v2-deploy__row">
-                  <Checkbox checked={picked.has(d.number)} onChange={() => toggle(d.number)} />
-                  <StatusDot tone={p.tone} />
-                  <span className="v2-visually-hidden">{p.label}, </span>
-                  <span className="v2-deploy__num">{d.number || '—'}</span>
-                  <span className="v2-deploy__desc">{d.description}</span>
-                  <RelativeTime className="v2-deploy__seen" value={d.lastUpdate} />
-                </label>
-              </li>
-            );
-          })
-        )}
-      </ul>
+      {devices === null ? (
+        <div className="v2-deploy__list" aria-busy="true">
+          <SkeletonRows compact count={4} label="Loading devices…" />
+        </div>
+      ) : (
+        <ul className="v2-deploy__list" aria-label="Devices">
+          {shown.length === 0 ? (
+            <li className="v2-deploy__empty">
+              {devicesError ? 'Couldn’t load devices.' : devices.length === 0 ? 'No devices yet.' : 'No devices match.'}
+            </li>
+          ) : (
+            shown.map((d) => {
+              const p = (d.statusCode && PRESENCE[d.statusCode]) || UNKNOWN;
+              return (
+                <li key={d.id}>
+                  <label className="v2-deploy__row">
+                    <Checkbox checked={picked.has(d.number)} onChange={() => toggle(d.number)} />
+                    <StatusDot tone={p.tone} />
+                    <span className="v2-visually-hidden">{p.label}, </span>
+                    <span className="v2-deploy__num">{d.number || '—'}</span>
+                    <span className="v2-deploy__desc">{d.description}</span>
+                    <RelativeTime className="v2-deploy__seen" value={d.lastUpdate} />
+                  </label>
+                </li>
+              );
+            })
+          )}
+        </ul>
+      )}
       <div className="v2-deploy__foot">
         {foot ?? <span />}
         <span className="v2-deploy__count" aria-live="polite">
