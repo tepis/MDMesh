@@ -62,6 +62,15 @@ public class DeviceCommandAuditTest {
     }
 
     @Test
+    public void auditsRetryApplyOnADevice() throws IOException, ServletException {
+        assertEquals(Optional.of(ResourceAuditInfo.RETRY_DEVICE_CONFIG),
+                ResourceAuditInfo.findAuditInfo("POST", "/rest/private/agent/v1/devices/h0001/retryConfig"));
+        assertFalse(ResourceAuditInfo.findAuditInfo("POST", "/rest/private/agent/v1/devices/a/b/retryConfig").isPresent());
+        AuditLogRecord record = audit("/rest/private/agent/v1/devices/h0001/retryConfig", "{}");
+        assertEquals("plugin.audit.action.device.retry.config", record.getAction());
+    }
+
+    @Test
     public void doesNotAuditOtherRoutes() {
         // Reading the command history is not an action.
         assertFalse(ResourceAuditInfo.findAuditInfo("GET", "/rest/private/agent/v1/devices/h0001/commands").isPresent());
@@ -179,14 +188,23 @@ public class DeviceCommandAuditTest {
 
     private static AuditLogRecord audit(String uri, String body, String characterEncoding)
             throws IOException, ServletException {
-        byte[] sent = body.getBytes(StandardCharsets.UTF_8);
-        ResourceAuditInfo info = ResourceAuditInfo.findAuditInfo("POST", uri).get();
+        return audit("POST", uri, body, characterEncoding);
+    }
+
+    static AuditLogRecord audit(String method, String uri, String body, String characterEncoding)
+            throws IOException, ServletException {
+        return audit(method, uri, body.getBytes(StandardCharsets.UTF_8), characterEncoding);
+    }
+
+    static AuditLogRecord audit(String method, String uri, byte[] sent, String characterEncoding)
+            throws IOException, ServletException {
+        ResourceAuditInfo info = ResourceAuditInfo.findAuditInfo(method, uri).get();
         FilterChain resource = (req, res) -> {
             assertArrayEquals(sent, readAll(req.getInputStream()));
             ((HttpServletResponse) res).setStatus(200);
             res.getOutputStream().write("{\"status\":\"OK\"}".getBytes(StandardCharsets.UTF_8));
         };
-        ResourceAuditor auditor = info.getResourceAuditor(request(uri, sent, characterEncoding), response(), resource, "", "X-Real-IP");
+        ResourceAuditor auditor = info.getResourceAuditor(request(method, uri, sent, characterEncoding), response(), resource, "", "X-Real-IP");
         auditor.doProcess();
         AuditLogRecord record = auditor.getAuditLogRecord();
         assertEquals(Integer.valueOf(0), record.getErrorCode());
@@ -201,7 +219,7 @@ public class DeviceCommandAuditTest {
         return new ObjectMapper().readTree(payload.substring(start, end));
     }
 
-    private static HttpServletRequest request(String uri, byte[] body, String characterEncoding) {
+    static HttpServletRequest request(String httpMethod, String uri, byte[] body, String characterEncoding) {
         ByteArrayInputStream in = new ByteArrayInputStream(body);
         ServletInputStream servletInputStream = new ServletInputStream() {
             @Override
@@ -214,7 +232,7 @@ public class DeviceCommandAuditTest {
                 (proxy, method, args) -> {
                     switch (method.getName()) {
                         case "getMethod":
-                            return "POST";
+                            return httpMethod;
                         case "getRequestURI":
                             return uri;
                         case "getInputStream":
@@ -232,7 +250,7 @@ public class DeviceCommandAuditTest {
                 });
     }
 
-    private static HttpServletResponse response() {
+    static HttpServletResponse response() {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ServletOutputStream servletOutputStream = new ServletOutputStream() {
             @Override

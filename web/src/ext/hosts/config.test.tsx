@@ -15,7 +15,6 @@ import { ORDER } from '../core/order';
 import { createRegistry, type Registry } from '../registry';
 import { configSection, defineExtension, lazyComponent, type ConfigSectionProps, type Contribution } from '../types';
 
-const LOAD = { timeout: 3000 };
 
 /** An ERROR envelope, as Response.ERROR(key, data) answers. */
 class Refusal {
@@ -47,6 +46,8 @@ function serve({ config = {}, onPut, plugins = [], devices = 2, currentUser }: S
       puts.push(body);
       return onPut ? onPut(body) : { ...stored, ...body };
     }
+    // Save and apply goes back to the list, which loads after the test: answer it as the server does.
+    if (p === '/private/configurations/search') return [stored];
     if (p === `/private/configurations/${stored.id}`) return stored;
     if (p === `/private/configurations/applications/${stored.id}`) return [];
     if (p.startsWith('/private/applications/search')) return [];
@@ -81,7 +82,7 @@ function open(
 const ext = (id: string, contributions: Contribution[], extra: { requires?: { serverPlugin: string } } = {}) =>
   defineExtension({ id, apiVersion: 1, title: id[0].toUpperCase() + id.slice(1), contributions, ...extra });
 
-const demoLabel = () => screen.findByLabelText('Demo label', undefined, LOAD) as Promise<HTMLInputElement>;
+const demoLabel = () => screen.findByLabelText('Demo label') as Promise<HTMLInputElement>;
 const saveBar = () => screen.queryByRole('region', { name: 'Unsaved changes' });
 const navLabels = () =>
   within(screen.getByRole('navigation', { name: 'Sections' }))
@@ -95,7 +96,11 @@ async function save() {
   await waitFor(() => expect(button().disabled).toBe(false));
   fireEvent.click(button());
 }
-const toastText = () => screen.getAllByRole('status').map((t) => t.textContent).join(' | ');
+// Toasts, failures and the rest alike, from the Notifications region.
+const toastText = () =>
+  Array.from(screen.getByRole('region', { name: 'Notifications' }).querySelectorAll('.toast'))
+    .map((t) => t.textContent)
+    .join(' | ');
 /**
  * Every toast shown from now on, kept after its 5 s timer removes it, so a test that counts them doesn't depend on
  * how fast it runs. Stop it with `stop()`.
@@ -106,7 +111,8 @@ function recordToasts() {
     for (const r of records) {
       for (const node of r.addedNodes) {
         if (!(node instanceof HTMLElement)) continue;
-        const toasts = node.matches('[role="status"]') ? [node] : [...node.querySelectorAll('[role="status"]')];
+        const sel = '.toast'; // status or alert
+        const toasts = node.matches(sel) ? [node] : [...node.querySelectorAll(sel)];
         for (const t of toasts) shown.push(t.textContent ?? '');
       }
     }
@@ -116,7 +122,7 @@ function recordToasts() {
 }
 
 async function typeDescription(text: string) {
-  const area = (await screen.findByText('Description', undefined, LOAD)).closest('.v2-field')?.querySelector('textarea');
+  const area = (await screen.findByText('Description')).closest('.v2-field')?.querySelector('textarea');
   if (!area) throw new Error('no description field');
   fireEvent.change(area, { target: { value: text } });
 }
@@ -126,7 +132,7 @@ describe('configuration sections: the host', () => {
     open();
     await demoLabel();
     expect(navLabels().map((l) => l?.replace(/\d.*$/, '').trim())).toEqual([
-      'Identity', 'Apps', 'Kiosk', 'Network', 'Demo', 'Security', 'Enrollment', 'Headwind only',
+      'Identity', 'Apps', 'Kiosk', 'Network', 'Demo', 'Security', 'Enrollment', 'Legacy launcher settings',
     ]);
     const card = document.getElementById('x-demo-demo');
     expect(card?.tagName).toBe('SECTION');
@@ -139,9 +145,9 @@ describe('configuration sections: the host', () => {
 
   it('with no extension, shows core’s sections only, as before', async () => {
     open({}, { registry: registryOf() });
-    await screen.findByText('Description', undefined, LOAD);
+    await screen.findByText('Description');
     expect(navLabels().map((l) => l?.replace(/\d.*$/, '').trim())).toEqual([
-      'Identity', 'Apps', 'Kiosk', 'Network', 'Security', 'Enrollment', 'Headwind only',
+      'Identity', 'Apps', 'Kiosk', 'Network', 'Security', 'Enrollment', 'Legacy launcher settings',
     ]);
   });
 
@@ -151,7 +157,7 @@ describe('configuration sections: the host', () => {
       [],
     );
     open({}, { registry });
-    await screen.findByText('Description', undefined, LOAD);
+    await screen.findByText('Description');
     expect(document.getElementById('kiosk')).toBeNull();
     expect(navLabels().join()).not.toContain('Kiosk');
   });
@@ -205,7 +211,7 @@ describe('configuration sections: changes', () => {
       }),
     ]);
     open({ config: { extensions: { reorder: { a: 1, b: 2 } } } }, { registry: registryOf(reorder) });
-    fireEvent.click(await screen.findByRole('button', { name: 'Rewrite' }, LOAD));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rewrite' }));
     expect(saveBar()).toBeNull();
   });
 
@@ -316,7 +322,7 @@ describe('configuration sections: problems', () => {
     ]);
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const { puts } = open({ config: { extensions: { fragile: { kept: true } } } }, { registry: registryOf(demo, fragile) });
-    fireEvent.click(await screen.findByRole('button', { name: 'Break' }, LOAD));
+    fireEvent.click(await screen.findByRole('button', { name: 'Break' }));
     const card = document.getElementById('x-fragile-fragile')!;
     expect(within(card).getByRole('alert').textContent).toContain(
       'The “Fragile” extension ran into a problem. Changes made here aren’t saved.',
@@ -366,7 +372,7 @@ describe('configuration sections: problems', () => {
     try {
       // Configuration A: the namespace is not stored, so the section gets the defaults.
       open({}, { registry });
-      fireEvent.click(await screen.findByRole('button', { name: 'Add host' }, LOAD));
+      fireEvent.click(await screen.findByRole('button', { name: 'Add host' }));
       expect(thrown.some((e) => e instanceof TypeError)).toBe(true);
       expect(screen.getByText('Hosts: none')).toBeTruthy();
       expect(saveBar()).toBeNull();
@@ -374,7 +380,7 @@ describe('configuration sections: problems', () => {
 
       // Configuration B, in the same session, has none either.
       const { puts } = open({ config: { id: 8, name: 'Office' } }, { registry });
-      expect(await screen.findByText('Hosts: none', undefined, LOAD)).toBeTruthy();
+      expect(await screen.findByText('Hosts: none')).toBeTruthy();
       await typeDescription('Front room');
       await save();
       await waitFor(() => expect(puts).toHaveLength(1));
@@ -404,7 +410,7 @@ describe('configuration sections: problems', () => {
       const c = document.getElementById('x-tagger-tagger')!;
       expect(within(c).getByRole('alert').textContent).toContain('The “Tagger” extension ran into a problem.');
       return c;
-    }, LOAD);
+    });
     expect(within(card).queryByText('Tagged')).toBeNull();
     await typeDescription('Back room');
     await save();
@@ -439,7 +445,7 @@ describe('configuration sections: problems', () => {
     window.addEventListener('error', onError);
     try {
       const { puts } = open({}, { registry: registryOf(hosts) });
-      fireEvent.click(await screen.findByRole('button', { name: 'Add h1' }, LOAD));
+      fireEvent.click(await screen.findByRole('button', { name: 'Add h1' }));
       expect(screen.getByText('Hosts: h1')).toBeTruthy();
       fireEvent.click(screen.getByRole('button', { name: 'Push h2' }));
       expect(thrown.some((e) => e instanceof TypeError)).toBe(true);
@@ -453,7 +459,7 @@ describe('configuration sections: problems', () => {
 
   it('keeps a stored value it cannot read, and says so', async () => {
     const { puts } = open({ config: { extensions: { demo: ['not', 'an', 'object'] } } });
-    await screen.findByText('Description', undefined, LOAD);
+    await screen.findByText('Description');
     const card = document.getElementById('x-demo-demo')!;
     expect(within(card).getByRole('alert').textContent).toContain('can’t be read here, so saving keeps them as they are');
     expect(screen.queryByLabelText('Demo label')).toBeNull();
@@ -489,7 +495,7 @@ describe('configuration sections: new configurations', () => {
 
   it('says a template’s unreadable value stops the new configuration, whose namespaces the server all checks', async () => {
     open({ config: { extensions: { demo: ['not', 'an', 'object'] } } }, { path: '/configurations/new?from=7' });
-    await screen.findByText('Description', undefined, LOAD);
+    await screen.findByText('Description');
     expect(within(document.getElementById('x-demo-demo')!).getByRole('alert').textContent).toBe(
       'The template’s “Demo” settings can’t be read here, and the server won’t create a configuration with them. ' +
         'Duplicate the template instead.',
@@ -502,7 +508,7 @@ describe('configuration sections: new configurations', () => {
       userRole: { ...ROLES.admin.userRole!, permissions: ROLES.admin.userRole!.permissions!.filter((p) => p.name !== 'copy_config') },
     };
     open({ config: { extensions: { demo: ['not', 'an', 'object'] } } }, { path: '/configurations/new?from=7', user: noCopy });
-    await screen.findByText('Description', undefined, LOAD);
+    await screen.findByText('Description');
     expect(within(document.getElementById('x-demo-demo')!).getByRole('alert').textContent).toBe(
       'The template’s “Demo” settings can’t be read here, and the server won’t create a configuration with them. ' +
         'Someone whose role may duplicate configurations can duplicate the template instead.',
@@ -540,13 +546,13 @@ describe('configuration sections: edge cases', () => {
     ]);
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const { puts } = open({}, { registry: registryOf(flaky) });
-    fireEvent.click(await screen.findByRole('button', { name: 'Break' }, LOAD));
+    fireEvent.click(await screen.findByRole('button', { name: 'Break' }));
     const card = document.getElementById('x-flaky-flaky')!;
     expect(within(card).getByRole('alert')).toBeTruthy();
     expect(saveBar()).toBeNull();
 
     explode = false;
-    fireEvent.click(within(card).getByRole('button', { name: 'Try again' }));
+    fireEvent.click(within(card).getByRole('button', { name: 'Retry' }));
     expect(await within(card).findByRole('button', { name: 'Boomed' })).toBeTruthy();
     expect(within(saveBar()!).getByText('1 unsaved change')).toBeTruthy();
     await save();
@@ -569,7 +575,7 @@ describe('configuration sections: edge cases', () => {
       }),
     ]);
     open({}, { registry: registryOf(bump) });
-    fireEvent.click(await screen.findByRole('button', { name: 'Bump' }, LOAD));
+    fireEvent.click(await screen.findByRole('button', { name: 'Bump' }));
     expect(within(saveBar()!).getByText('1 unsaved change')).toBeTruthy();
     expect(navEntry('Bump').textContent).toContain('1 changed');
   });
@@ -589,7 +595,7 @@ describe('configuration sections: edge cases', () => {
     ]);
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     const { puts } = open({}, { registry: registryOf(lister) });
-    fireEvent.click(await screen.findByRole('button', { name: 'List' }, LOAD));
+    fireEvent.click(await screen.findByRole('button', { name: 'List' }));
     expect(saveBar()).toBeNull();
     expect(logged.mock.calls.some(([m]) => String(m).includes('not a plain JSON object'))).toBe(true);
     await typeDescription('Back room');
@@ -628,7 +634,7 @@ describe('configuration sections: edge cases', () => {
     const withVpn = { ...ROLES.admin, userRole: { ...ROLES.admin.userRole!, permissions: [...ROLES.admin.userRole!.permissions!, { name: 'plugin_vpn_edit' }] } };
     let current: AuthUser = withVpn;
     const { puts } = open({ ...kept, currentUser: () => current }, { registry: registryOf(demo, vpn), user: withVpn });
-    fireEvent.click(await screen.findByRole('button', { name: 'Turn on' }, LOAD));
+    fireEvent.click(await screen.findByRole('button', { name: 'Turn on' }));
     expect(within(saveBar()!).getByText('1 unsaved change')).toBeTruthy();
 
     const toasts = recordToasts();
@@ -643,7 +649,7 @@ describe('configuration sections: edge cases', () => {
       // The role gets the permission back: the section shows its stored value, so the edit really left the draft.
       current = withVpn;
       act(() => void document.dispatchEvent(new Event('visibilitychange')));
-      expect(await screen.findByText('VPN is off', undefined, LOAD)).toBeTruthy();
+      expect(await screen.findByText('VPN is off')).toBeTruthy();
       expect(saveBar()).toBeNull();
       expect(dropped()).toHaveLength(1);
     } finally {
@@ -676,7 +682,7 @@ describe('configuration sections: edge cases', () => {
     let current: AuthUser = withFlaky;
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const { puts } = open({ currentUser: () => current }, { registry: registryOf(flaky), user: withFlaky });
-    fireEvent.click(await screen.findByRole('button', { name: 'Break' }, LOAD));
+    fireEvent.click(await screen.findByRole('button', { name: 'Break' }));
     const callout = within(document.getElementById('x-flaky-flaky')!).getByRole('alert');
     expect(callout.textContent).toContain('Changes made here aren’t saved.');
     expect(saveBar()).toBeNull();
@@ -690,7 +696,7 @@ describe('configuration sections: edge cases', () => {
     explode = false;
     current = withFlaky;
     act(() => void document.dispatchEvent(new Event('visibilitychange')));
-    expect(await screen.findByRole('button', { name: 'Break' }, LOAD)).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Break' })).toBeTruthy();
     expect(saveBar()).toBeNull();
     await typeDescription('Back room');
     await save();
@@ -740,7 +746,7 @@ describe('configuration sections: who sees and edits them', () => {
       { requires: { serverPlugin: 'netaccess' } },
     );
     open({ plugins: ['netaccess'] }, { registry: registryOf(netaccess) });
-    expect(await screen.findByText('VPN body', undefined, LOAD)).toBeTruthy();
+    expect(await screen.findByText('VPN body')).toBeTruthy();
   });
 
   it('makes the section read only on a built-in template', async () => {
@@ -760,5 +766,74 @@ describe('configuration sections: who sees and edits them', () => {
       { path: '/configurations/7', registry: registryOf(demo), user: ROLES.observer },
     );
     expect((await demoLabel()).disabled).toBe(true);
+  });
+});
+
+describe('configuration editor: the exit PIN', () => {
+  const pinField = async () => (await screen.findByLabelText('Kiosk exit PIN')) as HTMLInputElement;
+  const kioskCard = () => document.getElementById('kiosk')!;
+
+  it('keeps a PIN saved before the digits rule saveable, and asks for a new one', async () => {
+    const { puts } = open({ config: { kioskMode: true, password: '4931' } });
+    expect((await pinField()).inputMode).toBe('numeric');
+    expect(within(kioskCard()).getByText(/saved before exit PINs had to be 6 to 12 digits/)).toBeTruthy();
+    expect(navEntry('Kiosk').textContent).toContain('Old PIN');
+    await typeDescription('Front desk');
+    await save();
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0].password).toBe('4931');
+  });
+
+  it('refuses a changed PIN that is not 6 to 12 digits, before anything is sent, and says why at the field', async () => {
+    const { puts } = open({ config: { kioskMode: true, password: '482139' } });
+    const field = await pinField();
+    // Every invalid form is in configurationRules.test.ts; here, how the editor shows one.
+    fireEvent.change(field, { target: { value: '48213a' } });
+    expect(within(kioskCard()).getByText(/The exit PIN must be 6 to 12 digits/)).toBeTruthy();
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+    expect(navEntry('Kiosk').textContent).toContain('Check PIN');
+    await save();
+    await waitFor(() => expect(toastText()).toContain('Check the exit PIN'));
+    expect(screen.queryByRole('dialog', { name: /Change kiosk/ })).toBeNull();
+    expect(puts).toHaveLength(0);
+    expect(document.activeElement).toBe(field);
+
+    // A valid PIN clears it, and the save goes on (a PIN change asks first: it changes the kiosk).
+    fireEvent.change(field, { target: { value: '905172' } });
+    expect(within(kioskCard()).queryByText(/The exit PIN must be/)).toBeNull();
+    await save();
+    const confirm = await screen.findByRole('dialog', { name: /Change kiosk/ });
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Save and apply' }));
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0].password).toBe('905172');
+  });
+
+  it('keeps an old PIN editable on a copy with kiosk off, so the copy can be saved', async () => {
+    const { puts } = open({ config: { kioskMode: false, password: '4931' } }, { path: '/configurations/new?from=7' });
+    const field = await pinField();
+    const row = () => field.closest('fieldset')!;
+    expect(row().disabled).toBe(false);
+    expect(within(kioskCard()).getByText(/The exit PIN must be 6 to 12 digits/)).toBeTruthy();
+    fireEvent.change(field, { target: { value: '' } });
+    expect(row().disabled).toBe(true);
+    await save();
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0].password ?? '').toBe('');
+  });
+
+  it('lets an old PIN be cleared (no exit on the device)', async () => {
+    const { puts, fetch } = open({ config: { kioskMode: true, password: 'let me out' } });
+    const field = await pinField();
+    fireEvent.change(field, { target: { value: 'let me out!' } });
+    expect(within(kioskCard()).getByText(/The exit PIN must be 6 to 12 digits/)).toBeTruthy();
+    fireEvent.change(field, { target: { value: '' } });
+    expect(within(kioskCard()).queryByText(/The exit PIN must be/)).toBeNull();
+    await save();
+    fireEvent.click(within(await screen.findByRole('dialog', { name: /Change kiosk/ })).getByRole('button', { name: 'Save and apply' }));
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0].password ?? '').toBe('');
+    // The save goes back to the list: let its load finish inside the test.
+    await waitFor(() => expect(fetch.mock.calls.some(([u]) => String(u).includes('/configurations/search'))).toBe(true));
+    await screen.findByRole('link', { name: /Warehouse/ });
   });
 });

@@ -26,6 +26,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Getter;
 import lombok.Setter;
 import java.util.Map;
+import java.util.List;
 
 /**
  * Desired-state document carried by the {@code config.apply} command (proto/payloads/config-apply.schema.json).
@@ -56,4 +57,6 @@ public class DesiredConfig {
      * and documents without it keep their revision.
      */
     private DesiredDisplay display;
+    /** Null for a legacy configuration row; empty means release all managed app permission overrides. */
+    private List<DesiredAppPermissions> appPermissions;
 }

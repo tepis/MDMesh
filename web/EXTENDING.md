@@ -272,7 +272,7 @@ configuration. Its changes are not counted or saved.
 **Edge cases.**
 
 - A body that crashes shows a callout in its card ("Changes made here aren't saved"). Its namespace keeps the stored
-  value, and the rest of the configuration still saves. "Try again" renders it again, and its change counts again.
+  value, and the rest of the configuration still saves. "Retry" renders it again, and its change counts again.
 - A stored value that isn't a JSON object is not shown. On an update it goes back as stored. A new configuration
   from that template is refused by the server (which checks every namespace of a new configuration). Duplicate on the
   template copies `extensions` as they are, and needs `copy_config`. The callout suggests Duplicate only to a role
@@ -330,10 +330,13 @@ core links to (`/settings#updates`).
 },
 ```
 
-- `main` and `aside` cards fill the rows under the fleet summary, ordered by `ORDER.overviewCard`. A `main` card
-  starts a row, and the `aside` cards after it stack in that row's narrow column. The body renders a `Card`.
+- `main` and `aside` cards sit under the fleet summary in two columns, each ordered by `ORDER.overviewCard`: every
+  `main` card stacks in the wide column (8 of 12) and every `aside` card in the narrow one (4 of 12). The columns are
+  independent, so an `aside` doesn't pair with the `main` card before it, and with no cards of one kind the other
+  column takes the full width. Each card is as tall as its content. The body renders a `Card`.
 - `stat` is a tile in the fleet summary, ordered by `ORDER.overviewStat`. The body renders a `StatCell`
-  (`<StatCell label="Blocked today" value="12" />`).
+  (`<StatCell label="Blocked today" value="12" />`). On the first-run Overview (no device enrolled yet) the fleet
+  summary and core's stats are hidden; extensions' stat tiles still show.
 - A body that renders nothing takes no room.
 
 ### list.column
@@ -377,8 +380,9 @@ column stays last.
 An entry in a row's "More actions" menu, on Devices or Apps. `item(row, helpers)` returns a menu item
 (`{ key, label, onSelect, icon?, danger?, disabled?, textValue? }`; `textValue` when `label` isn't plain text), or
 null to leave it out for that row. Helpers are `toast` and `refresh()`, and on Devices `sendCommand(devices, command,
-values?)`. That sends one device as the device page does and several as one bulk request. It refuses wipe and
-passcode reset for any number of devices: those are sent from the device page only. On Devices, from
+values?)`. That sends one device as the device page does and several as one bulk request. It refuses wipe,
+passcode reset and an app's uninstall or hide (`app.uninstall`, `app.setHidden`) for any number of devices: those are
+sent from the device page only. On Devices, from
 `ORDER.devicesRowAction.move` on an entry joins the group below the separator. Place Apps entries with
 `ORDER.appsRowAction`.
 
@@ -473,15 +477,33 @@ plainly (no `base`). Keep a helper that needs `vitest`, `@testing-library` or
 - the API client: `apiClient` (calls under `/rest`, unwraps the server's envelope), `ApiError`, `API_BASE`, and the
   types `DeviceView`, `Configuration`, `Application`, `TelemetrySnapshot`, `DeviceState`, `QueueCommandRequest`,
   `ConfigStatus`;
-- the UI kit: buttons, `Card`, `CardHeader`, `Callout`, `Notice`, fields and inputs, `Segmented`, `TriState`,
-  `Toggle`, tabs, `Table`, `KeyValueList`, `SectionNav`, `Badge`, status pills, bars, `EmptyState`, `Modal`, `Menu`,
-  `PageHeader`, `Pagination`, `RelativeTime`, `CopyField`, `StatCell`, and the icons.
+- the UI kit: buttons, `Card`, `CardHeader`, `Callout`, `Notice`, fields and inputs, `Select`, `Segmented`,
+  `TriState`, `Toggle`, tabs, `Table`, `KeyValueList`, `SectionNav`, `Badge`, status pills, bars, `EmptyState`,
+  `ErrorState`, `Skeleton`, `SkeletonRows`, `SkeletonFacts`, `Modal`, `Menu`, `Tooltip`, `Popover`, `PageHeader`,
+  `Pagination`, `RelativeTime`, `CopyField`, `StatCell`, the page grid (`Grid`, `GridCell`), `useStickyValue` (keeps a
+  dialog's content while it closes), and the icons.
 
 `web/src/sdk/surface.txt` lists every name. Nothing else in `web/src` is public, and any of it may change in any
 release. Style with the design tokens (the `.v2` custom properties in `web/src/tokens.css`, as `var(--ink)` or
 `var(--surface)`), and prefix your classes `x-<id>-`: `v2-` classes are core's. The `v2` in `.v2` and `v2-` is part of
 the names, not a version: they are stable, and no later console renames them for a "v3". `npm run dev` serves the
 component gallery at `/_gallery`.
+
+The console is built to WCAG 2.2 AA, and an extension's pages should be too. The tokens are paired so that text
+tokens (`--text`, `--text-2`, `--secondary`, the `--*-ink` status colours) reach 4.5:1 on the surfaces, and
+`--input-border` (inputs and selects), `--control-border` (icon-only buttons, a selected item's ring) and the status
+dot colours reach 3:1. Text buttons keep soft edges, since their label identifies them: secondary `--border-strong`,
+subtle `--border`, danger `--alert-line`. Use the shared `Select` and `IconButton` rather than bare elements.
+
+`Select` is a listbox button (Radix), not a native `<select>`, since 0.5.0. It takes a single select's props
+(`<option>` and `<optgroup>` children, `value` or `defaultValue`, `name`, `required`, `form`, `disabled`), and
+`onChange(e)` gets `e.target.value` and `e.target.name`, with no native event behind it. Its `ref` is a
+`SelectHandle` (`value`, `name`, `disabled`, `required`, `focus()`, `blur()`); `triggerRef` gives the button. Until
+0.6.0, `native` (or `multiple`, which implies it) draws the old native `<select>`, with a native change event and the
+element as `ref`; both are deprecated, so move to the listbox, and to checkboxes for several values.
+`web/src/a11y/contrastPairs.ts` lists each pair and `componentEdges.test.ts` which edges must be 3:1. Use those
+rather than your own colours, give every control a name, and run axe over your page in a test, as
+`web/src/a11y/routes.a11y.test.tsx` does for core's.
 
 ## Server plugin
 

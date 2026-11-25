@@ -16,14 +16,18 @@ type Mode = 'device' | 'config';
 
 /**
  * Deploy dialog (classic components/DeployModal): push the app to any number of devices now, or add it to a
- * configuration (library apps only), offering the modes the role may use.
+ * configuration (library apps only), offering the modes the role may use. Keep it mounted while it closes (`open`
+ * false, the last subject kept) so it plays its exit; mount a fresh one (a new `key`) for each opening.
  */
 export function DeployModal({
+  open = true,
   subject,
   modes,
   onClose,
   onAssigned,
 }: {
+  /** Default true: rendered means open. Pass false to close it with its exit motion. */
+  open?: boolean;
   subject: DeploySubject;
   modes: DeployModes;
   onClose: () => void;
@@ -127,7 +131,7 @@ export function DeployModal({
 
   return (
     <Modal
-      open
+      open={open}
       onClose={() => !busy && onClose()}
       dismissOnBackdrop={!busy}
       title={`Deploy ${subject.label}`}
@@ -182,7 +186,7 @@ export function DeployModal({
           <TabPanel idBase={idBase} tabKey="config" className="v2-deploy__panel">
             <Field label="Configuration" help="Every device on this configuration installs the app on its next sync.">
               <Select value={config} onChange={(e) => setConfig(e.target.value)}>
-                <option value="">Select a configuration…</option>
+                <option value="">Select a configuration</option>
                 {configs.map((c) => (
                   <option key={c.id} value={String(c.id)}>
                     {c.name}
@@ -192,7 +196,6 @@ export function DeployModal({
             </Field>
           </TabPanel>
         )}
-
       </div>
     </Modal>
   );

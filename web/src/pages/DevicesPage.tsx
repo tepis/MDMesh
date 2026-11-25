@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router';
 import { forceSync } from '../api/commands';
 import { listConfigurations, type ConfigurationSummary } from '../api/configurations';
 import type { DeviceView } from '../api/devices';
-import { useDevices } from '../data/useDevices';
+import { LOAD_DEVICES_FAILED, useDevices } from '../data/useDevices';
 import { CORE_ACTION_ACCESS } from '../ext/core/access';
 import { withCoreDevicesParts } from '../ext/core/lists';
 import { ORDER } from '../ext/core/order';
@@ -24,6 +24,13 @@ import {
   ButtonLink,
   Callout,
   Card,
+  ErrorState,
+  Field,
+  IconFilter,
+  Popover,
+  Select,
+  SkeletonRows,
+  Tooltip,
   Checkbox,
   Chip,
   ConfigSync,
@@ -37,7 +44,6 @@ import {
   IconSync,
   IconTable,
   IconWarning,
-  LabelledSelect,
   Menu,
   Notice,
   PageHeader,
@@ -50,13 +56,19 @@ import {
   cx,
   deriveDeviceKind,
   useMediaQuery,
+  useStickyValue,
   useToast,
   type DeviceKind,
   type SortDir,
   type TableProps,
+  isRowClick,
+  noShiftSelect,
+  shiftOf,
+  shiftSpace,
 } from '../ui';
 import { ChangeConfigurationModal, DeleteDevicesModal, RunActionModal } from '../ui/BulkModals';
 import { ISSUE_ORDER, ISSUE_REASON, issueKind, type IssueKind, type Presence } from '../data/fleetHealth';
+import { notConnected } from '../data/presence';
 import { useFleetSync } from '../data/useFleetSync';
 import { ISSUE_CHIP, syncKind, syncLabel } from './devicesStatus';
 import './DevicesPage.css';
@@ -96,7 +108,7 @@ const VIEW_DEFAULT_SORT: Record<View, Sort> = {
   table: { key: 'lastSeen', dir: 'descending' },
   cards: { key: 'attention', dir: 'ascending' },
 };
-const PRESENCE_RANK: Record<Presence, number> = { attention: 0, online: 1, offline: 2 };
+const PRESENCE_RANK: Record<Presence, number> = { attention: 0, online: 1, offline: 2, wiped: 3 };
 const isCoreSort = (key: string): key is SortKey => Object.prototype.hasOwnProperty.call(SORT_LABEL, key);
 
 function readStorage(key: string): string | null {
@@ -119,7 +131,6 @@ const compareText = (a: string, b: string) => a.localeCompare(b, undefined, { nu
 const errText = (e: unknown) => (e instanceof Error ? e.message : '');
 
 /** Interactive descendants handle their own clicks; a click elsewhere on a row or card opens (or selects) it. */
-const INTERACTIVE = 'a, button, input, select, textarea, label, [role="menu"], [role="menuitem"]';
 
 /** Devices, table and cards. Classic: pages/DevicesPage.tsx. */
 export function DevicesPage() {
@@ -154,10 +165,12 @@ export function DevicesPage() {
 
   // ---- filters ----
   const [q, setQ] = useState('');
-  // ?status=online|attention|offline; the Overview legend links here with it.
+  // ?status=online|attention|offline|wiped; the Overview legend (and its wiped count) links here with it.
   const urlStatus = params.get('status');
   const status: StatusFilter =
-    urlStatus === 'online' || urlStatus === 'attention' || urlStatus === 'offline' ? urlStatus : 'all';
+    urlStatus === 'online' || urlStatus === 'attention' || urlStatus === 'offline' || urlStatus === 'wiped'
+      ? urlStatus
+      : 'all';
   const setStatus = (v: StatusFilter) =>
     setParams(
       (p) => {
@@ -263,12 +276,13 @@ export function DevicesPage() {
   const kind = useCallback((d: DeviceView): DeviceKind => kindOf.get(d.id) ?? 'phone', [kindOf]);
 
   // A hardware id shared by more than one row = the same physical device enrolled twice.
+  // A wiped row (wipedAt) is left out of All, so it neither counts as a duplicate nor makes its twin one (#137).
   const dupCount = useMemo(() => {
     const m = new Map<string, number>();
-    for (const d of devices) if (d.hardwareId) m.set(d.hardwareId, (m.get(d.hardwareId) ?? 0) + 1);
+    for (const d of devices) if (d.hardwareId && d.wipedAt == null) m.set(d.hardwareId, (m.get(d.hardwareId) ?? 0) + 1);
     return m;
   }, [devices]);
-  const dupOf = useCallback((d: DeviceView) => (d.hardwareId ? (dupCount.get(d.hardwareId) ?? 0) : 0), [dupCount]);
+  const dupOf = useCallback((d: DeviceView) => (d.hardwareId && d.wipedAt == null ? (dupCount.get(d.hardwareId) ?? 0) : 0), [dupCount]);
   const dupTotal = useMemo(() => devices.filter((d) => dupOf(d) > 1).length, [devices, dupOf]);
   useEffect(() => {
     if (dupTotal === 0 && dupOnly) setDupOnly(false);
@@ -303,11 +317,28 @@ export function DevicesPage() {
   const { syncOf, presenceOf, check, refresh } = useFleetSync(devices, loading, visible);
   const presence = useCallback((d: DeviceView) => presenceOf(d, now), [presenceOf, now]);
 
+  // The first load lands in one piece: the list, its counts, the attention strip and the subtitle appear together
+  // once the sync check has settled (or after 2s, whichever comes first), instead of the strip popping in above a
+  // table that is already showing. Later refreshes keep what is on screen.
+  const [settled, setSettled] = useState(false);
+  const listReady = !loading || devices.length > 0;
+  useEffect(() => {
+    if (settled || !listReady) return;
+    if (check !== 'pending') {
+      setSettled(true);
+      return;
+    }
+    const t = window.setTimeout(() => setSettled(true), 2000);
+    return () => window.clearTimeout(t);
+  }, [settled, listReady, check]);
+
   const counts = useMemo(() => {
-    const c = { online: 0, attention: 0, offline: 0 };
+    const c = { online: 0, attention: 0, offline: 0, wiped: 0 };
     for (const d of devices) c[presence(d)]++;
     return c;
   }, [devices, presence]);
+  // What "All" shows: a wiped device erased itself and no longer reports, so it shows under Wiped only (#137).
+  const active = devices.length - counts.wiped;
 
   const issues = useMemo(() => {
     const m: Partial<Record<IssueKind, number>> = {};
@@ -322,7 +353,7 @@ export function DevicesPage() {
   const filtered = useMemo(
     () =>
       baseFiltered.filter((d) => {
-        if (status !== 'all' && presence(d) !== status) return false;
+        if (status === 'all' ? presence(d) === 'wiped' : presence(d) !== status) return false;
         if (issue && issueKind(syncOf(d)) !== issue) return false;
         return true;
       }),
@@ -436,16 +467,48 @@ export function DevicesPage() {
     });
   const clearSel = () => setSelected(new Set());
   // Selecting is for the bulk actions, so a role without any gets no checkboxes, and a role refresh that takes the
-  // last one away drops the selection, so a row click opens the device again.
-  const canSelect = bulkActions.length > 0;
+  // last one away drops the selection, so a row click opens the device again. Wiped devices take no bulk action
+  // (#137), and they show under Wiped only, so that view has no checkboxes either and no other view holds one.
+  const canSelect = bulkActions.length > 0 && status !== 'wiped';
   useEffect(() => {
     if (!canSelect) setSelected((prev) => (prev.size === 0 ? prev : new Set()));
   }, [canSelect]);
   const selectionActive = canSelect && selectedIds.length > 0;
 
-  // Once a selection is in progress, a click on a row or card (outside its links and buttons) toggles it, as in the
-  // v0.3 console; otherwise it opens the device. The route takes the number, like the v0.3 links.
-  const activate = (d: DeviceView) => (selectionActive ? toggle(d.id) : navigate(paths.device(d.number)));
+  // The device last toggled: Shift with the next one selects, or clears, every device between them on this page, in
+  // the list's order, to match it.
+  const anchor = useRef<number | null>(null);
+  // An emptied selection (Clear, a bulk action done, the last box unticked) leaves no range to extend: the next
+  // Shift+click starts afresh.
+  useEffect(() => {
+    if (selected.size === 0) anchor.current = null;
+  }, [selected]);
+  const pick = (d: DeviceView, shiftKey = false) => {
+    const from = anchor.current;
+    anchor.current = d.id;
+    const ids = pageRows.map((r) => r.id);
+    const a = from === null ? -1 : ids.indexOf(from);
+    const b = ids.indexOf(d.id);
+    if (!shiftKey || a < 0 || b < 0 || a === b) {
+      toggle(d.id);
+      return;
+    }
+    const on = selected.has(from as number);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const id of ids.slice(Math.min(a, b), Math.max(a, b) + 1)) {
+        if (on) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+  };
+
+  // Once a selection is in progress, a click on a row or card (outside its links and buttons) toggles it, Shift+click
+  // a range, as in the v0.3 console; otherwise it opens the device (its name link opens it either way). The route
+  // takes the number, like the v0.3 links.
+  const activate = (d: DeviceView, e?: { shiftKey: boolean }) =>
+    selectionActive ? pick(d, !!e?.shiftKey) : navigate(paths.device(d.number));
 
   // The latest search asked for (its answer may still be on the way), so a refresh never brings back an older one.
   const refreshList = useCallback(() => reload(requested.current), [reload]);
@@ -455,8 +518,9 @@ export function DevicesPage() {
   async function syncNow(d: DeviceView) {
     setSyncing((s) => new Set(s).add(d.id));
     try {
-      await forceSync(d.number);
-      toast.push('ok', 'Sync requested', d.number);
+      const { connected } = await forceSync(d.number);
+      if (connected === false) toast.push('warn', ...notConnected(d.number, 'sync'));
+      else toast.push('ok', 'Sync requested', d.number);
       refresh(d);
     } catch (e) {
       toast.push('err', 'Sync failed', errText(e));
@@ -475,12 +539,12 @@ export function DevicesPage() {
     row: {
       move: (d) => ({
         key: 'move',
-        label: 'Change configuration…',
+        label: 'Change configuration',
         onSelect: () => setDialog({ kind: 'move', ids: [d.id], label: d.number, fromSelection: false }),
       }),
       delete: (d) => ({
         key: 'delete',
-        label: 'Delete…',
+        label: 'Delete',
         danger: true,
         onSelect: () => setDialog({ kind: 'delete', ids: [d.id], label: d.number, fromSelection: false }),
       }),
@@ -496,14 +560,23 @@ export function DevicesPage() {
 
   const rowActions = (d: DeviceView, size: 'sm' | 'md') => {
     const items = rowMenu.items(d);
+    // A wiped device erased itself: there is nothing to wake (core's Lock and Ring are greyed out too).
+    const wiped = presence(d) === 'wiped';
     return (
-      <div className={cx('v2-devices-actions', size === 'sm' && 'v2-devices-actions--card')}>
+      <div className={cx('v2-rowactions', size === 'sm' && 'v2-devices-actions--card')}>
         {canEdit ? (
-          <IconButton label={`Sync ${d.number} now`} size={size} disabled={syncing.has(d.id)} onClick={() => void syncNow(d)}>
-            <IconSync size={size === 'sm' ? 14 : 15} />
-          </IconButton>
+          <Tooltip content="Sync now">
+            <IconButton
+              label={`Sync now: ${d.number}`}
+              size={size === 'sm' ? 'sm' : 'xs'}
+              disabled={syncing.has(d.id) || wiped}
+              onClick={() => void syncNow(d)}
+            >
+              <IconSync size={14} />
+            </IconButton>
+          </Tooltip>
         ) : null}
-        {items.length ? <Menu label={`More actions for ${d.number}`} iconSize={size} items={items} /> : null}
+        {items.length ? <Menu label={`More actions for ${d.number}`} iconSize={size === 'sm' ? 'sm' : 'xs'} items={items} /> : null}
       </div>
     );
   };
@@ -512,9 +585,10 @@ export function DevicesPage() {
   const statusOf = (d: DeviceView) => {
     const p = presence(d);
     const k = issueKind(syncOf(d));
-    let reason: string | undefined;
+    let reason: ReactNode;
     if (p === 'attention' && k) reason = ISSUE_REASON[k];
     else if (p === 'offline' && !d.lastUpdate) reason = 'Never checked in';
+    else if (p === 'wiped') reason = <RelativeTime value={d.wipedAt} prefix="Wiped " />;
     return { p, reason };
   };
 
@@ -529,8 +603,8 @@ export function DevicesPage() {
         <span className="v2-cfgsync__name">{name}</span>
       </div>
     ) : (
-      <span className="v2-cfgsync v2-cfgsync--stack">
-        <span>{name}</span>
+      <span className="v2-cfgsync v2-cfgsync--line">
+        <span className="v2-cfgsync__name">{name}</span>
       </span>
     );
   };
@@ -589,17 +663,19 @@ export function DevicesPage() {
   const partial = check === 'partial';
   const attentionKnown = check === 'partial' || check === 'complete';
   const attentionText = `${counts.attention}${partial ? '+' : ''}`;
-  const mono = (v: number | string) => <span className="v2-mono">{v}</span>;
-  let subtitle: ReactNode;
-  if (!(loading && devices.length === 0) && !error && devices.length > 0) {
+  const mono = (v: number | string) => <span className="v2-num">{v}</span>;
+  // Written once every count is in (the sync check settled), so it never rewrites itself as data arrives; its line
+  // is reserved meanwhile.
+  let subtitle: ReactNode = null;
+  if (settled && !error && active > 0) {
     subtitle = (
       <>
         {/* A capped list (over 1000) counts only the loaded devices: say so next to the server total. */}
         {total > devices.length ? <>{mono(total)} devices; </> : null}
         {mono(counts.online)} of {total > devices.length ? 'the first ' : ''}
-        {mono(devices.length)} online now
+        {mono(active)} online now
         {attentionKnown && counts.attention > 0 ? <>, {mono(attentionText)} need attention</> : null}
-        {counts.offline > 0 ? <>, {mono(counts.offline)} haven’t checked in</> : null}.
+        {counts.offline > 0 ? <>, {mono(counts.offline)} offline</> : null}.
       </>
     );
   }
@@ -630,6 +706,15 @@ export function DevicesPage() {
     setDupOnly(false);
   };
 
+  // The filters behind the Filter button: how many are on, and clearing just them.
+  const filterCount = [type !== 'all', configFilter !== 'all', android !== 'all', dupOnly].filter(Boolean).length;
+  const clearMenuFilters = () => {
+    setType('all');
+    setConfigFilter('all');
+    setAndroid('all');
+    setDupOnly(false);
+  };
+
   const pickIssue = (k: IssueKind) => {
     if (issue === k) {
       setIssue(null);
@@ -639,13 +724,14 @@ export function DevicesPage() {
     setIssue(k);
   };
 
-  const bulkBar = selectionActive ? (
+  const bulkBar = canSelect ? (
     <BulkSelectionBar
-      variant={view === 'table' ? 'attached' : 'standalone'}
+      open={selectionActive}
       count={selectedIds.length}
       total={filtered.length}
       onSelectAll={() => setSelected(new Set(filtered.map((d) => d.id)))}
       onClear={clearSel}
+      hint="Shift-click for a range"
     >
       <BulkActions actions={bulkActions} rows={selectedRows} helpers={helpers} />
     </BulkSelectionBar>
@@ -682,13 +768,13 @@ export function DevicesPage() {
           serverQuery ? (
             <Button onClick={clearFilters}>Clear search</Button>
           ) : canEdit ? (
-            <ButtonLink to={paths.enroll} variant="primary" icon={<IconPlus />}>
+            <ButtonLink to={paths.enroll} variant="primary" size="lg" icon={<IconPlus />}>
               Enroll device
             </ButtonLink>
           ) : undefined
         }
       >
-        {serverQuery ? undefined : 'No devices are enrolled yet.'}
+        {serverQuery ? undefined : 'Enroll one to see it, and manage it, here.'}
       </EmptyState>
     ) : (
       <EmptyState
@@ -700,14 +786,16 @@ export function DevicesPage() {
           ? 'The configuration sync state could not be loaded, so devices that need attention can’t be found.'
           : status === 'attention' && check === 'pending'
             ? 'Still checking which devices need attention…'
-            : undefined}
+            : status === 'all' && baseFiltered.some((d) => presence(d) === 'wiped')
+              ? 'Wiped devices show under Wiped.'
+              : undefined}
       </EmptyState>
     );
 
   const selection: TableProps<DeviceView>['selection'] = canSelect
     ? {
         selected,
-        onToggle: (_k, d) => toggle(d.id),
+        onToggle: (_k, d, how) => pick(d, how?.shiftKey),
         onToggleAll: (select) =>
           setSelected((prev) => {
             const next = new Set(prev);
@@ -723,12 +811,10 @@ export function DevicesPage() {
     : undefined;
 
   let body: ReactNode;
-  if (loading && devices.length === 0) {
+  if (!settled && !(error && devices.length === 0)) {
     body = (
-      <Card aria-busy="true">
-        <p className="v2-devices-loading" role="status">
-          Loading devices…
-        </p>
+      <Card padding="none" clip aria-busy="true">
+        <SkeletonRows count={view === 'table' ? Math.min(pageSize, 10) : 6} label="Loading devices…" />
       </Card>
     );
   } else if (error && devices.length === 0) {
@@ -745,7 +831,6 @@ export function DevicesPage() {
             columns={columns}
             rows={pageRows}
             rowKey={(d) => d.id}
-            edge={16}
             minWidth={860}
             selection={selection}
             sort={{ key: sort.key, dir: sort.dir, onSort }}
@@ -770,19 +855,21 @@ export function DevicesPage() {
                 <li
                   key={d.id}
                   className={cx('v2-devices-card', on && 'is-selected')}
+                  onMouseDown={canSelect ? noShiftSelect : undefined}
                   onClick={(e) => {
-                    if (!(e.target as HTMLElement).closest(INTERACTIVE)) activate(d);
+                    if (isRowClick(e)) activate(d, e);
                   }}
                 >
                   <div className="v2-devices-card__top">
                     {identity(d, 'card')}
                     {canSelect ? (
                       <Checkbox
-                        size={17}
                         className="v2-devices-card__check"
                         aria-label={`Select ${d.number}`}
                         checked={on}
-                        onChange={() => toggle(d.id)}
+                        onChange={(e) => pick(d, shiftOf(e.nativeEvent))}
+                        onKeyDown={(e) => shiftSpace(e, () => pick(d, true))}
+                        onKeyUp={(e) => shiftSpace(e)}
                       />
                     ) : null}
                     <PresenceStatus layout="inline" status={s.p} reason={s.reason} />
@@ -792,7 +879,7 @@ export function DevicesPage() {
                   <dl className="v2-devices-card__facts">
                     <div>
                       <dt>Android</dt>
-                      <dd className="v2-mono">{orDash(d.androidVersion)}</dd>
+                      <dd className="v2-num">{orDash(d.androidVersion)}</dd>
                     </div>
                     <div>
                       <dt>Last seen</dt>
@@ -812,7 +899,15 @@ export function DevicesPage() {
   }
 
   const issueEntries = ISSUE_ORDER.filter((k) => (issues[k] ?? 0) > 0);
-  const edit = dialog && dialog.kind !== 'run' ? dialog : null;
+  const shown = useStickyValue(dialog);
+  // Counts openings (a dialog after none): each opening's dialog is a fresh one. State updated while rendering, from
+  // `dialog`: React renders again at once.
+  const [opening, setOpening] = useState(0);
+  const [wasOpen, setWasOpen] = useState(false);
+  if (!!dialog !== wasOpen) {
+    setWasOpen(!!dialog);
+    if (dialog) setOpening((n) => n + 1);
+  }
 
   return (
     <>
@@ -821,23 +916,14 @@ export function DevicesPage() {
         subtitle={subtitle}
         actions={
           canEdit ? (
-            <ButtonLink to={paths.enroll} variant="primary" size="hero" icon={<IconPlus />}>
+            <ButtonLink to={paths.enroll} variant="primary" size="lg" icon={<IconPlus />}>
               Enroll device
             </ButtonLink>
           ) : undefined
         }
       />
 
-      {error ? (
-        <Callout tone="alert" role="alert">
-          <span className="v2-devices-callout">
-            {error}
-            <Button size="sm" onClick={() => void refreshList()}>
-              Try again
-            </Button>
-          </span>
-        </Callout>
-      ) : null}
+      {error ? <ErrorState thing="devices" detail={error === LOAD_DEVICES_FAILED ? undefined : error} onRetry={() => void refreshList()} /> : null}
 
       {total > devices.length && !loading ? (
         <Callout tone="info">
@@ -845,13 +931,13 @@ export function DevicesPage() {
         </Callout>
       ) : null}
 
-      {attentionKnown && counts.attention > 0 ? (
+      {settled && attentionKnown && counts.attention > 0 ? (
         <Notice
           aria-label="Needs attention"
           icon={<IconWarning />}
           action={
             (issues.agentTooOld ?? 0) > 0 ? (
-              <ButtonLink to={`${paths.settings}#agent-rollout`} strong>
+              <ButtonLink to={`${paths.settings}#agent-rollout`} size="sm">
                 Roll out an agent update
               </ButtonLink>
             ) : undefined
@@ -879,7 +965,6 @@ export function DevicesPage() {
           onChange={setQ}
         />
         <Segmented<StatusFilter>
-          size="lg"
           aria-label="Status"
           value={status}
           onChange={(v) => {
@@ -887,68 +972,101 @@ export function DevicesPage() {
             setIssue(null);
           }}
           options={[
-            { value: 'all', label: 'All', count: devices.length },
+            { value: 'all', label: 'All', count: active },
             { value: 'online', label: 'Online', count: counts.online },
-            { value: 'attention', label: 'Attention', count: attentionKnown ? attentionText : '–' },
+            { value: 'attention', label: 'Needs attention', count: attentionKnown ? attentionText : '–' },
             { value: 'offline', label: 'Offline', count: counts.offline },
+            // Only once there is one (or a link asks for it), like Duplicates.
+            ...(counts.wiped > 0 || status === 'wiped'
+              ? [{ value: 'wiped' as const, label: 'Wiped', count: counts.wiped }]
+              : []),
           ]}
         />
-        {view === 'cards' ? (
-          <LabelledSelect
-            label="Sort"
-            value={sort.key}
-            onChange={(e) => {
-              const k = e.target.value as SortKey;
-              setSortChoice({ key: k, dir: SORT_DEFAULT_DIR[k] });
-            }}
-          >
-            {(Object.keys(SORT_LABEL) as SortKey[]).map((k) => (
-              <option key={k} value={k}>
-                {SORT_LABEL[k]}
-              </option>
-            ))}
-          </LabelledSelect>
-        ) : null}
-        <LabelledSelect label="Type" value={type} onChange={(e) => setType(e.target.value as 'all' | DeviceKind)}>
-          <option value="all">All</option>
-          {typeOptions.map((k) => (
-            <option key={k} value={k}>
-              {DEVICE_KIND_LABEL[k]}
-            </option>
-          ))}
-        </LabelledSelect>
-        <LabelledSelect label="Configuration" value={configFilter} onChange={(e) => setConfigFilter(e.target.value)}>
-          <option value="all">All</option>
-          {configOptions.list.map(([id, name]) => (
-            <option key={id} value={id}>
-              {name}
-            </option>
-          ))}
-          {configOptions.unassigned ? <option value="none">Unassigned</option> : null}
-        </LabelledSelect>
-        <LabelledSelect label="Android" value={android} onChange={(e) => setAndroid(e.target.value)}>
-          <option value="all">All</option>
-          {androidOptions.map((a) => (
-            <option key={a} value={a}>
-              {a}
-            </option>
-          ))}
-        </LabelledSelect>
-        {dupTotal > 0 ? (
-          <button
-            type="button"
-            className={cx('v2-devices-dup', dupOnly && 'is-pressed')}
-            aria-pressed={dupOnly}
-            title="Devices that share a hardware ID with another row: likely the same physical device enrolled more than once"
-            onClick={() => setDupOnly((v) => !v)}
-          >
-            Duplicates <span className="v2-mono">{dupTotal}</span>
-          </button>
-        ) : null}
+        <Popover
+          label="Filters"
+          align="start"
+          trigger={
+            <Button icon={<IconFilter />} aria-label={filterCount ? `Filter, ${filterCount} on` : 'Filter'}>
+              Filter
+              {filterCount ? <span className="v2-devices-filtercount">{filterCount}</span> : null}
+            </Button>
+          }
+        >
+          <div className="v2-devices-filters">
+            <Field label="Type">
+              <Select value={type} onChange={(e) => setType(e.target.value as 'all' | DeviceKind)}>
+                <option value="all">All types</option>
+                {typeOptions.map((k) => (
+                  <option key={k} value={k}>
+                    {DEVICE_KIND_LABEL[k]}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Configuration">
+              <Select value={configFilter} onChange={(e) => setConfigFilter(e.target.value)}>
+                <option value="all">All configurations</option>
+                {configOptions.list.map(([id, name]) => (
+                  <option key={id} value={id}>
+                    {name}
+                  </option>
+                ))}
+                {configOptions.unassigned ? <option value="none">Unassigned</option> : null}
+              </Select>
+            </Field>
+            <Field label="Android">
+              <Select value={android} onChange={(e) => setAndroid(e.target.value)}>
+                <option value="all">All versions</option>
+                {androidOptions.map((a) => (
+                  <option key={a} value={a}>
+                    {a}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            {view === 'cards' ? (
+              <Field label="Sort">
+                <Select
+                  value={sort.key}
+                  onChange={(e) => {
+                    const k = e.target.value as SortKey;
+                    setSortChoice({ key: k, dir: SORT_DEFAULT_DIR[k] });
+                  }}
+                >
+                  {(Object.keys(SORT_LABEL) as SortKey[]).map((k) => (
+                    <option key={k} value={k}>
+                      {SORT_LABEL[k]}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            ) : null}
+            {dupTotal > 0 ? (
+              <Checkbox
+                label={
+                  <span className="v2-devices-filters__dup">
+                    <span>
+                      Only duplicates <span className="v2-num v2-secondary">{dupTotal}</span>
+                    </span>
+                    <span className="v2-devices-filters__help">
+                      Devices that share a hardware ID with another row: likely one device enrolled more than once.
+                    </span>
+                  </span>
+                }
+                checked={dupOnly}
+                onChange={() => setDupOnly((v) => !v)}
+              />
+            ) : null}
+            {filterCount ? (
+              <Button variant="ghost" size="sm" className="v2-devices-filters__clear" onClick={clearMenuFilters}>
+                Clear filters
+              </Button>
+            ) : null}
+          </div>
+        </Popover>
         <span className="v2-devices-toolbar__spacer" />
         {!narrow ? (
           <Segmented<View>
-            size="lg"
             aria-label="View"
             value={view}
             onChange={setView}
@@ -962,32 +1080,45 @@ export function DevicesPage() {
 
       {body}
 
-      {dialog?.kind === 'run' ? (
-        <RunActionModal deviceIds={dialog.ids} devices={dialog.devices} onClose={() => setDialog(null)} onDone={clearSel} />
+      {/* The dialogs stay mounted while they close (their exit motion), showing the last subject; a new opening is a
+          fresh dialog (its key), so nothing typed in an earlier one carries over. */}
+      {shown?.kind === 'run' ? (
+        <RunActionModal
+          key={opening}
+          open={dialog?.kind === 'run'}
+          deviceIds={shown.ids}
+          devices={shown.devices}
+          onClose={() => setDialog(null)}
+          onDone={clearSel}
+        />
       ) : null}
-      {edit?.kind === 'move' ? (
+      {shown?.kind === 'move' ? (
         <ChangeConfigurationModal
-          ids={edit.ids}
-          label={edit.label}
+          key={opening}
+          open={dialog?.kind === 'move'}
+          ids={shown.ids}
+          label={shown.label}
           configurations={allConfigs ?? []}
           configurationsError={allConfigsError}
           onClose={() => setDialog(null)}
           onDone={async () => {
-            if (edit.fromSelection) clearSel();
+            if (shown.fromSelection) clearSel();
             await refreshList();
           }}
         />
       ) : null}
-      {edit?.kind === 'delete' ? (
+      {shown?.kind === 'delete' ? (
         <DeleteDevicesModal
-          ids={edit.ids}
-          label={edit.label}
+          key={opening}
+          open={dialog?.kind === 'delete'}
+          ids={shown.ids}
+          label={shown.label}
           onClose={() => setDialog(null)}
           onDone={async () => {
             setSelected((prev) => {
-              if (edit.fromSelection) return new Set();
+              if (shown.fromSelection) return new Set();
               const next = new Set(prev);
-              for (const id of edit.ids) next.delete(id);
+              for (const id of shown.ids) next.delete(id);
               return next;
             });
             await refreshList();

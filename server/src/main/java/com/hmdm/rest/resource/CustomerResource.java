@@ -28,10 +28,12 @@ import com.hmdm.persistence.UnsecureDAO;
 import com.hmdm.persistence.UserDAO;
 import com.hmdm.persistence.domain.Customer;
 import com.hmdm.persistence.domain.User;
+import com.hmdm.rest.json.CurrentPassword;
 import com.hmdm.rest.json.CustomerSearchRequest;
 import com.hmdm.rest.json.PaginatedData;
 import com.hmdm.rest.json.Response;
 import com.hmdm.security.ConsoleSession;
+import com.hmdm.security.LoginThrottle;
 import com.hmdm.security.SecurityContext;
 import com.hmdm.service.MailchimpService;
 import com.hmdm.util.PasswordUtil;
@@ -70,6 +72,7 @@ public class CustomerResource {
     private UnsecureDAO unsecureDAO;
     private UserDAO userDAO;
     private MailchimpService mailchimpService;
+    private CurrentPasswordCheck currentPassword;
 
     public CustomerResource() {
     }
@@ -77,13 +80,29 @@ public class CustomerResource {
     /**
      * <p>Constructs new <code>CustomerResource</code> instance. This implementation does nothing.</p>
      */
+    /**
+     * @param kioskImages the kiosk background images: held while configurations that use them are copied into a new
+     *                    account
+     */
     @Inject
-    public CustomerResource(CustomerDAO customerDAO, UnsecureDAO unsecureDAO, UserDAO userDAO, MailchimpService mailchimpService) {
+    public CustomerResource(CustomerDAO customerDAO, UnsecureDAO unsecureDAO, UserDAO userDAO, MailchimpService mailchimpService,
+                            LoginThrottle loginThrottle,
+                            com.hmdm.rest.resource.support.KioskBackgroundImageAssets kioskImages) {
         this.customerDAO = customerDAO;
         this.unsecureDAO = unsecureDAO;
         this.userDAO = userDAO;
         this.mailchimpService = mailchimpService;
+        this.currentPassword = new CurrentPasswordCheck(userDAO, unsecureDAO, loginThrottle);
+        this.kioskImages = kioskImages;
     }
+
+    /** Tests that don't involve kiosk background images. */
+    public CustomerResource(CustomerDAO customerDAO, UnsecureDAO unsecureDAO, UserDAO userDAO, MailchimpService mailchimpService,
+                            LoginThrottle loginThrottle) {
+        this(customerDAO, unsecureDAO, userDAO, mailchimpService, loginThrottle, null);
+    }
+
+    private com.hmdm.rest.resource.support.KioskBackgroundImageAssets kioskImages;
 
     /**
      * Customer accounts are super-admin business. Every route starts here, before it reads or writes anything (the
@@ -151,7 +170,7 @@ public class CustomerResource {
     @PUT
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response updateCustomer(Customer customer) {
+    public Response updateCustomer(Customer customer, @Context HttpServletRequest req) {
         if (notSuperAdmin("save a customer")) {
             return Response.PERMISSION_DENIED();
         }
@@ -188,7 +207,30 @@ public class CustomerResource {
                     log.warn("User with email {} already exists, customer {}", customer.getEmail(), dbUser.getCustomerId());
                     return Response.DUPLICATE_ENTITY("error.duplicate.email");
                 }
-                String adminCredentials = this.customerDAO.insertCustomer(customer);
+                // Creating a customer creates its admin account, which takes the caller's current password
+                Response refused = currentPassword.refused(SecurityContext.get().getCurrentUser().orElse(null),
+                        customer.getOldPassword(), req);
+                if (refused != null) {
+                    log.warn("Refused to create customer {}: current password of {} not accepted",
+                            customer.getName(), SecurityContext.get().getCurrentUserName());
+                    return refused;
+                }
+                // The kiosk background images of the configurations copied into the new account are held meanwhile.
+                List<com.hmdm.rest.resource.support.KioskBackgroundImageAssets.Applied> held = new java.util.ArrayList<>();
+                String adminCredentials;
+                try {
+                    if (kioskImages != null && customer.getConfigurationIds() != null) {
+                        for (Integer id : customer.getConfigurationIds()) {
+                            com.hmdm.persistence.domain.Configuration c = id == null ? null : unsecureDAO.getConfigurationById(id);
+                            if (c != null && c.getBackgroundImageFileId() != null) {
+                                held.add(kioskImages.holdExisting(c.getBackgroundImageFileId(), false));
+                            }
+                        }
+                    }
+                    adminCredentials = this.customerDAO.insertCustomer(customer);
+                } finally {
+                    for (com.hmdm.rest.resource.support.KioskBackgroundImageAssets.Applied h : held) h.release();
+                }
                 if (customer.getEmail() != null && !customer.getEmail().trim().equals("")) {
                     if (mailchimpService.initialize()) {
                         mailchimpService.subscribe(customer, "cloud_demo");
@@ -202,10 +244,19 @@ public class CustomerResource {
                 dbCustomer = customerDAO.findById(customer.getId());
                 dbUser = dbCustomer != null ? unsecureDAO.findByEmail(dbCustomer.getEmail()) : null;
                 if (dbUser != null) {
-                    dbUser.setLogin(CustomerDAO.transliterate(customer.getName()));
-                    dbUser.setName(customer.getMainUserName());
-                    dbUser.setEmail(customer.getEmail());
-                    this.userDAO.updateUserMainDetails(dbUser, false);
+                    if (UserDAO.isEmailChange(dbUser.getEmail(), customer.getEmail())) {
+                        // This is also the email of the customer's admin account, where recovery links go
+                        Response refused = currentPassword.refused(SecurityContext.get().getCurrentUser().orElse(null),
+                                customer.getOldPassword(), req);
+                        if (refused != null) {
+                            log.warn("Refused to change the email of customer {}: current password of {} not accepted",
+                                    customer.getId(), SecurityContext.get().getCurrentUserName());
+                            return refused;
+                        }
+                    }
+                    // Login, name and email only: the admin account's role and access stay as they are in the row
+                    this.userDAO.updateUserIdentity(dbUser.getId(), CustomerDAO.transliterate(customer.getName()),
+                            customer.getMainUserName(), customer.getEmail());
                 }
                 this.customerDAO.updateCustomer(customer);
                 return Response.OK();
@@ -218,12 +269,22 @@ public class CustomerResource {
 
     @DELETE
     @Path("/{id}")
+    @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
-    public Response removeCustomer(@PathParam("id") Integer id) {
+    public Response removeCustomer(@PathParam("id") Integer id, CurrentPassword body,
+                                   @Context HttpServletRequest req) {
         if (notSuperAdmin("delete a customer")) {
             return Response.PERMISSION_DENIED();
         }
         try {
+            // Deleting a customer deletes its accounts, which takes the caller's current password
+            Response refused = currentPassword.refused(SecurityContext.get().getCurrentUser().orElse(null),
+                    body == null ? null : body.getOldPassword(), req);
+            if (refused != null) {
+                log.warn("Refused to delete customer {}: current password of {} not accepted",
+                        id, SecurityContext.get().getCurrentUserName());
+                return refused;
+            }
             this.customerDAO.removeCustomerById(id);
             return Response.OK();
         } catch (Exception e) {
@@ -274,6 +335,10 @@ public class CustomerResource {
         if (notSuperAdmin("impersonate a customer")) {
             return Response.PERMISSION_DENIED();
         }
+        if (ConsoleSession.isImpersonated(req)) {
+            log.warn("Failed to impersonate customer {}: already signed in as another account", id);
+            return Response.PERMISSION_DENIED();
+        }
         try {
             if (SecurityContext.get().isSuperAdmin()) {
                 Customer customer = this.customerDAO.findById(id);
@@ -294,7 +359,8 @@ public class CustomerResource {
 
                     orgAdmin.setPassword(null);
 
-                    ConsoleSession.start(req, orgAdmin);
+                    ConsoleSession.startImpersonated(req, orgAdmin,
+                            SecurityContext.get().getCurrentUser().orElse(null));
 
                     return Response.OK( orgAdmin );
                 } else {

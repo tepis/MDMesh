@@ -56,6 +56,27 @@ public class AuditRulePathTest {
     }
 
     @Test
+    public void makingAndStoppingEnrollmentCodesIsAudited() {
+        assertEquals(Optional.of(ResourceAuditInfo.MINT_ENROLL_TOKEN),
+                ResourceAuditInfo.findAuditInfo("POST", "/rest/private/agent/v1/token"));
+        assertEquals(Optional.of(ResourceAuditInfo.MINT_ENROLL_TOKEN),
+                ResourceAuditInfo.findAuditInfo("POST", "/rest/private/agent/v1/token/"));
+        assertEquals(Optional.of(ResourceAuditInfo.REVOKE_ENROLL_TOKENS),
+                ResourceAuditInfo.findAuditInfo("POST", "/rest/private/agent/v1/token/revoke-all"));
+    }
+
+    @Test
+    public void roleChangesAreAudited() {
+        assertEquals(Optional.of(ResourceAuditInfo.UPDATE_ROLE),
+                ResourceAuditInfo.findAuditInfo("PUT", "/rest/private/roles"));
+        assertEquals(Optional.of(ResourceAuditInfo.UPDATE_ROLE),
+                ResourceAuditInfo.findAuditInfo("PUT", "/rest/private/roles/"));
+        assertEquals(Optional.of(ResourceAuditInfo.REMOVE_ROLE),
+                ResourceAuditInfo.findAuditInfo("DELETE", "/rest/private/roles/7"));
+        assertEquals(Optional.empty(), ResourceAuditInfo.findAuditInfo("GET", "/rest/private/roles/all"));
+    }
+
+    @Test
     public void otherRoutesStayUnaudited() {
         assertEquals(Optional.empty(), ResourceAuditInfo.findAuditInfo("POST", "/rest/public/auth/loginx"));
         assertEquals(Optional.empty(), ResourceAuditInfo.findAuditInfo("PUT", "/rest/private/users/current/x"));

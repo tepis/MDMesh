@@ -38,6 +38,7 @@ import {
   StatCell,
   StatGrid,
   Stepper,
+  TabPanel,
   Tabs,
   type CardPadding,
   type MenuEntry,
@@ -71,10 +72,10 @@ function Boom(): ReactNode {
 const MENU: MenuEntry[] = [
   { key: 'lock', label: 'Lock', icon: <Icons.IconLock size={15} />, onSelect: () => {} },
   { key: 'ring', label: 'Ring', icon: <Icons.IconRing size={15} />, onSelect: () => {} },
-  { key: 'cfg', label: 'Change configuration…', icon: <Icons.IconSliders />, onSelect: () => {} },
+  { key: 'cfg', label: 'Change configuration', icon: <Icons.IconSliders />, onSelect: () => {} },
   { key: 'off', label: 'Exit kiosk', icon: <Icons.IconExitKiosk size={15} />, onSelect: () => {}, disabled: true },
   'separator',
-  { key: 'del', label: 'Delete…', icon: <Icons.IconTrash />, onSelect: () => {}, danger: true },
+  { key: 'del', label: 'Delete', icon: <Icons.IconTrash />, onSelect: () => {}, danger: true },
 ];
 
 export function GalleryMore() {
@@ -197,6 +198,7 @@ export function GalleryMore() {
           <Tabs
             size="md"
             aria-label="Method"
+            idBase="gal-method"
             value={qr}
             onChange={setQr}
             items={[
@@ -204,6 +206,10 @@ export function GalleryMore() {
               { key: 'token', label: 'Token' },
             ]}
           />
+          {/* A tab names the panel it controls (aria-controls), so the demo renders one. */}
+          <TabPanel idBase="gal-method" tabKey={qr}>
+            {qr === 'qr' ? 'Scan the code' : 'Type the token'}
+          </TabPanel>
         </Row>
       </Section>
 
@@ -255,7 +261,7 @@ export function GalleryMore() {
           items={[
             { key: 1, label: 'Apply configuration', detail: 'USB storage: permission denied', status: 'failed', when: <RelativeTime value={now - 3 * min} /> },
             { key: 2, label: 'Sync now', detail: 'Sent by admin', status: 'done', when: <RelativeTime value={now - 3 * min} /> },
-            { key: 3, label: 'Lock device', detail: 'Not delivered within 24h', status: 'expired', when: <RelativeTime style="long" value={now - 26 * 60 * min} /> },
+            { key: 3, label: 'Lock', detail: 'Not delivered within 24h', status: 'expired', when: <RelativeTime style="long" value={now - 26 * 60 * min} /> },
           ]}
         />
       </Card>

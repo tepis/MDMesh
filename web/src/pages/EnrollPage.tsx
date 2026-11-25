@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ApiError } from '../api/client';
 import { getConfigurations, type Configuration } from '../api/configurations';
-import { mintEnrollToken } from '../api/enroll';
+import { mintEnrollToken, revokeAllEnrollTokens } from '../api/enroll';
 import { getUpdateStatus, type UpdateStatus } from '../api/updates';
+import { Link } from 'react-router';
+import { ARRIVAL_LABEL, arrivalNews, useArrivals, type Arrival } from '../enroll/arrivals';
+import { addressProblem, wifiProblem } from '../enroll/checks';
 import { agentApkUrl, buildProvisioningPayload, serverBaseUrl, type WifiSecurity } from '../enroll/provisioning';
 import {
   Button,
@@ -11,6 +14,9 @@ import {
   CardHeader,
   CopyField,
   Field,
+  Grid,
+  GridCell,
+  IconAlert,
   IconSync,
   IconWarning,
   Input,
@@ -19,6 +25,7 @@ import {
   NumberedSteps,
   PageHeader,
   Select,
+  Skeleton,
   TabPanel,
   Tabs,
   Toggle,
@@ -26,7 +33,9 @@ import {
   useToast,
   type KeyValueItem,
   LinkButton,
+  Modal,
 } from '../ui';
+import { paths } from '../routes';
 // Not from the barrel: QrPanel pulls in `qrcode`, which stays in this page's chunk.
 import { QrPanel } from '../ui/QrPanel';
 import './EnrollPage.css';
@@ -39,13 +48,62 @@ const SECURITY_VALUES: WifiSecurity[] = ['WPA', 'WEP', 'NONE', 'EAP'];
  * falls back to the debug agent's package and checksum (we only read the flag here; the payload is built there).
  */
 const RELEASE_BUILD = !!(import.meta.env as Record<string, string | undefined>).VITE_AGENT_CHECKSUM;
-const SERVER_SETTING = 'Server setting for new devices';
+const SERVER_SETTING = 'Use the server default';
 const METHOD_TABS = 'v2-enroll-method';
 
 type Method = 'qr' | 'token';
 interface Minted {
   value: string;
   expiresAt?: number;
+  /** When the server made it (server clock). */
+  createdAt?: number;
+  /** The devices it enrolls, as the server says (1 from a server whose tokens are all single-use). */
+  maxUses: number;
+  /** The server applied the chosen devices and validity; false: it predates them, and made a single-use 24 h code. */
+  limitsApplied: boolean;
+}
+
+/**
+ * How many devices one code enrolls: one, a code to send to a customer, or a batch set up together. A code for several
+ * works for anyone who has it until it expires, so it is bounded both ways.
+ */
+const USES_OPTIONS = [1, 10, 25, 100];
+/** How long a code is valid. */
+const VALID_OPTIONS: { hours: number; label: string }[] = [
+  { hours: 24, label: '24 hours' },
+  { hours: 72, label: '3 days' },
+  { hours: 168, label: '7 days' },
+  { hours: 720, label: '30 days' },
+];
+
+function usesText(n: number): string {
+  return n === 1 ? 'One device, then it stops working' : `Up to ${n} devices, then it stops working`;
+}
+
+/** Codes for a batch this page replaced that may still work: how many, and when the last of them expires. */
+interface Replaced {
+  count: number;
+  until?: number;
+}
+
+/** What to say about the codes this page replaced. */
+function replacedText(r: Replaced): string {
+  if (r.count === 1) {
+    return `The code for a batch you replaced still works ${r.until ? `until ${fmtExpiry(r.until)}` : 'until it expires'}, for anyone who has it.`;
+  }
+  return `The ${r.count} codes for a batch you replaced still work ${r.until ? `until ${fmtExpiry(r.until)}` : 'until they expire'}, for anyone who has them.`;
+}
+
+/** Why stopping the codes failed, in words. */
+function revokeError(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.httpStatus === 404 || err.httpStatus === 405)
+      return "This server can't stop codes. Update it, or wait for the codes to expire.";
+    if (err.message === 'error.permission.denied')
+      return "Your account can't stop codes: it needs permission to edit devices.";
+    return err.message || "Couldn't stop the codes.";
+  }
+  return "Couldn't stop the codes.";
 }
 
 function readDefault(): string {
@@ -64,24 +122,27 @@ function tokenError(err: unknown): string {
       return "That configuration doesn't exist any more, or your account can't use it. Pick another one.";
     if (err.message === 'error.permission.denied')
       return "Your account can't enroll devices: it needs permission to edit devices.";
-    return err.message || 'Failed to generate a token.';
+    if (err.message === 'error.agent.token.maxUses') return 'A code can enroll 1 to 1000 devices.';
+    if (err.message === 'error.agent.token.validHours') return 'A code can be valid for 1 hour to 30 days.';
+    return err.message || 'Couldn’t make a code.';
   }
-  return 'Failed to generate a token.';
+  return 'Couldn’t make a code.';
 }
 
-/** Token expiry, short enough for the summary box: the token lives 24 h, so no year ("Oct 16, 1:54 PM"). */
+/** Token expiry, short enough for the summary box: a token lives 30 days at most, so no year ("Oct 16, 1:54 PM"). */
 function fmtExpiry(ms: number): string {
   const d = new Date(ms);
   if (Number.isNaN(d.getTime())) return '—';
   return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
-/** "in 24 hours", "in 5 minutes", "in under a minute". */
+/** "in 7 days", "in 24 hours", "in 5 minutes", "in under a minute". */
 function untilText(ms: number, now: number): string {
   const min = Math.floor((ms - now) / 60_000);
   if (min < 1) return 'in under a minute';
   if (min < 60) return `in ${min} minute${min === 1 ? '' : 's'}`;
   const hr = Math.round(min / 60);
+  if (hr >= 48) return `in ${Math.round(hr / 24)} days`;
   return `in ${hr} hour${hr === 1 ? '' : 's'}`;
 }
 
@@ -112,8 +173,52 @@ function qrSteps(wifiInCode: boolean): ReactNode[] {
     wifiInCode
       ? 'Scan this code when the camera opens.'
       : 'Scan this code when the camera opens. Connect to Wi-Fi if the device asks.',
-    'Wait a few minutes while the agent installs. The device then appears under Devices.',
+    'Wait a few minutes while the agent installs. The device then appears below, and under Devices.',
   ];
+}
+
+/** How long a piece of arrival news stays in the live region: read by then, and not left for browse mode to find. */
+const NEWS_MS = 7000;
+
+interface News {
+  id: number;
+  text: string;
+  /** When it leaves the live region. */
+  until: number;
+}
+
+/**
+ * What a screen reader hears about the devices enrolling: each new device or change of state once, as it happens
+ * (several at once counted), and that the page stopped looking. Each piece is its own keyed node that leaves after
+ * {@link NEWS_MS}, as the toasts' announcements do: the same sentence twice (a second stop, two "Scanner: Online."
+ * looks apart) is a new node, so it is read again. `active` false (no code yet, a server without the list): nothing.
+ * `clear` empties it (Look again: the stop it says no longer holds).
+ */
+function useArrivalNews(arrivals: Arrival[], active: boolean, watching: boolean): { news: News[]; clear: () => void } {
+  const [news, setNews] = useState<News[]>([]);
+  const seq = useRef(0);
+  const seen = useRef<Arrival[]>([]);
+  const wasWatching = useRef(watching);
+  useEffect(() => {
+    if (!active) return;
+    const lines = arrivalNews(seen.current, arrivals);
+    seen.current = arrivals;
+    if (wasWatching.current && !watching) lines.push('Stopped looking for new devices after 30 minutes.');
+    wasWatching.current = watching;
+    if (!lines.length) return;
+    const id = ++seq.current;
+    setNews((n) => [...n.slice(-4), { id, text: lines.join(' '), until: Date.now() + NEWS_MS }]);
+  }, [arrivals, active, watching]);
+  useEffect(() => {
+    if (!news.length) return;
+    const t = setTimeout(
+      () => setNews((n) => n.filter((x) => x.until > Date.now())),
+      Math.max(0, news[0].until - Date.now()) + 1,
+    );
+    return () => clearTimeout(t);
+  }, [news]);
+  const clear = useCallback(() => setNews([]), []);
+  return { news, clear };
 }
 
 /** Enroll. Classic: pages/EnrollPage.tsx. */
@@ -124,6 +229,8 @@ export function EnrollPage() {
   const [method, setMethod] = useState<Method>('qr');
   const [defaultId] = useState(readDefault);
   const [cfgId, setCfgId] = useState(defaultId);
+  const [uses, setUses] = useState(1);
+  const [validHours, setValidHours] = useState(24);
   /** null while loading. */
   const [configs, setConfigs] = useState<Configuration[] | null>(null);
   const [configsFailed, setConfigsFailed] = useState(false);
@@ -143,7 +250,24 @@ export function EnrollPage() {
   const [tokError, setTokError] = useState<string | null>(null);
   const mintSeq = useRef(0);
   const minted = useRef(false);
+  /** The code last shown, to tell whether a new one replaces a code for a batch that still works. */
+  const shown = useRef<Minted | null>(null);
+  const [replaced, setReplaced] = useState<Replaced | null>(null);
+  const [stopOpen, setStopOpen] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [stopError, setStopError] = useState<string | null>(null);
   const now = useNow(30_000, token?.expiresAt);
+  /** Server time of the first code made on this visit: devices enrolled since then show up on the page. */
+  const [since, setSince] = useState<number | undefined>(undefined);
+  const { arrivals, watching, unsupported: arrivalsUnsupported, watchAgain } = useArrivals(since);
+  const { news: arrivalSaid, clear: clearArrivalNews } = useArrivalNews(arrivals, since != null && !arrivalsUnsupported, watching);
+  const arrivalsHead = useRef<HTMLHeadingElement>(null);
+  const lookAgain = () => {
+    clearArrivalNews();
+    watchAgain();
+    // "Look again" goes away when the page looks again: keep focus on the list instead of losing it to the page.
+    arrivalsHead.current?.focus();
+  };
 
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
 
@@ -210,21 +334,38 @@ export function EnrollPage() {
   }, [selected, configs]);
 
   /**
-   * Mint a single-use token bound to configuration `id` ('' = none: the server's setting for new devices). The
-   * latest call wins. `keep` leaves the current code up while a new one for the SAME configuration is minted
-   * ("New code"); a configuration change clears it, so a code never carries a token for another configuration.
+   * Mint a token for `maxUses` devices, valid `hours`, bound to configuration `id` ('' = none: the server's setting
+   * for new devices). The latest call wins. `keep` leaves the current code up while a new one for the SAME choices is
+   * minted ("New code"); changing a choice clears it, so a code never carries a token for other choices.
    */
-  const generate = useCallback(async (id: string, keep: boolean) => {
+  const generate = useCallback(async (id: string, keep: boolean, maxUses: number, hours: number) => {
     const seq = ++mintSeq.current;
     const n = Number(id);
+    // A new code doesn't stop the one it replaces. For a batch that one keeps working for anyone who has it: say so,
+    // and offer to stop it (a single-use code is less of a worry, and the page never showed it to anyone else).
+    const prev = shown.current;
+    shown.current = null;
+    if (prev && prev.maxUses > 1 && !(prev.expiresAt && prev.expiresAt <= Date.now())) {
+      setReplaced((r) => ({
+        count: (r?.count ?? 0) + 1,
+        until: Math.max(r?.until ?? 0, prev.expiresAt ?? 0) || undefined,
+      }));
+    }
     setBusy(true);
     setTokError(null);
     if (!keep) setToken(null);
     try {
-      const res = await mintEnrollToken(Number.isFinite(n) && n > 0 ? n : undefined);
+      const res = await mintEnrollToken(Number.isFinite(n) && n > 0 ? n : undefined, { maxUses, validHours: hours });
       if (seq !== mintSeq.current) return;
-      if (res.token) setToken({ value: res.token, expiresAt: res.expiresAt });
-      else setTokError('The server did not return a token.');
+      const applied = typeof res.maxUses === 'number';
+      const devices = typeof res.maxUses === 'number' ? res.maxUses : 1;
+      if (res.token) {
+        const createdAt = typeof res.createdAt === 'number' ? res.createdAt : undefined;
+        const next = { value: res.token, expiresAt: res.expiresAt, createdAt, maxUses: devices, limitsApplied: applied };
+        shown.current = next;
+        setToken(next);
+        if (createdAt != null) setSince((s) => s ?? createdAt);
+      } else setTokError('The server did not return a token.');
     } catch (err) {
       if (seq === mintSeq.current) setTokError(tokenError(err));
     } finally {
@@ -232,9 +373,9 @@ export function EnrollPage() {
     }
   }, []);
 
-  // The token binds the device to the configuration server-side: mint again whenever the choice changes. The first
-  // code is minted at once; a later choice waits until it settles, so arrowing through the select mints one token
-  // (each lives 24 h), not one per option passed. The old code goes at once: it is for another configuration.
+  // The token binds the device to the configuration and its limits server-side: mint again whenever a choice changes.
+  // The first code is minted at once; a later choice waits until it settles, so arrowing through a select mints one
+  // token (each lives until it expires), not one per option passed. The old code goes at once: it is for other choices.
   useEffect(() => {
     if (!mintReady) return;
     if (minted.current) {
@@ -246,18 +387,64 @@ export function EnrollPage() {
     const t = setTimeout(
       () => {
         minted.current = true;
-        void generate(cfgId, false);
+        void generate(cfgId, false, uses, validHours);
       },
       minted.current ? MINT_SETTLE_MS : 0,
     );
     return () => clearTimeout(t);
-  }, [cfgId, generate, mintReady]);
+  }, [cfgId, uses, validHours, generate, mintReady]);
 
-  const newCode = () => void generate(cfgId, true);
+  const newCode = () => void generate(cfgId, true, uses, validHours);
 
-  const givesName = selected?.name ?? (cfgId ? `Configuration #${cfgId}` : SERVER_SETTING);
+  /** Stop every code that still works, then make a new one for the current choices (the shown one stopped too). */
+  const stopAll = async () => {
+    setStopping(true);
+    setStopError(null);
+    try {
+      const res = await revokeAllEnrollTokens();
+      shown.current = null;
+      setReplaced(null);
+      setStopOpen(false);
+      const n = typeof res.revoked === 'number' ? res.revoked : null;
+      toast.push(
+        'ok',
+        'Codes stopped',
+        n === null ? 'Every enrollment code stopped working. A new code is ready.' : `${n} code${n === 1 ? '' : 's'} stopped working. A new code is ready.`,
+      );
+      void generate(cfgId, false, uses, validHours);
+    } catch (err) {
+      setStopError(revokeError(err));
+    } finally {
+      setStopping(false);
+    }
+  };
+  const openStop = () => {
+    setStopError(null);
+    setStopOpen(true);
+  };
+
+  const givesName = selected?.name ?? (cfgId ? `Configuration #${cfgId}` : 'Server default');
+  // What the code does, not what was asked: an older server ignores both choices and makes a single-use 24 h code.
+  const limitsIgnored = !!token && !token.limitsApplied && (uses !== 1 || validHours !== 24);
+  let devicesHelp: string;
+  if (limitsIgnored) {
+    devicesHelp =
+      'This server makes single-use codes, valid for 24 hours, whatever is chosen here. Update it to set up a batch with one code.';
+  } else if (uses === 1) {
+    devicesHelp = 'One device, then the code stops working: the one to send a customer.';
+  } else {
+    devicesHelp = `Anyone with this code can enroll up to ${uses} devices until it expires, or until you stop all codes. Share it only with whoever sets them up.`;
+  }
   const ssid = wifiSsid.trim();
-  const wifiInCode = wifiOn && !!ssid;
+  const wifiIssue = wifiOn ? wifiProblem({ ssid: wifiSsid, password: wifiPass, security: wifiSec }) : null;
+  const wifiInCode = wifiOn && !!ssid && !wifiIssue;
+  // The code carries this page's address (see enroll/provisioning.ts); compare it with the server's own setting, which
+  // every configuration carries.
+  const serverSetting = useMemo(
+    () => configs?.map((c) => c.baseUrl).find((v): v is string => typeof v === 'string' && v.trim() !== '') ?? null,
+    [configs],
+  );
+  const address = useMemo(() => addressProblem(serverBaseUrl(), serverSetting), [serverSetting]);
   const expired = !!token?.expiresAt && token.expiresAt <= now;
   const payload = useMemo(
     () =>
@@ -270,7 +457,14 @@ export function EnrollPage() {
     [token, wifiInCode, wifiSsid, wifiPass, wifiSec],
   );
 
-  let expiresValue: ReactNode = busy ? 'Making a code…' : '—';
+  let expiresValue: ReactNode = busy ? (
+    <>
+      <Skeleton width="12em" />
+      <span className="v2-visually-hidden">Making a code…</span>
+    </>
+  ) : (
+    '—'
+  );
   if (token?.expiresAt) {
     expiresValue = expired ? (
       <span className="v2-enroll__expired">Expired {fmtExpiry(token.expiresAt)}</span>
@@ -279,9 +473,12 @@ export function EnrollPage() {
     );
   }
   const facts = (withWifi: boolean): KeyValueItem[] => [
-    { key: 'gives', label: 'Gives', value: <span className="v2-enroll__gives">{givesName}</span> },
-    ...(withWifi && wifiOn ? [{ key: 'wifi', label: 'Joins Wi-Fi', value: ssid || 'No network name yet' }] : []),
-    { key: 'use', label: 'Use', value: 'One device, then it stops working' },
+    // What the code carries, named plainly (the picker's "Use the server default" is an instruction, not a name).
+    { key: 'configuration', label: 'Configuration', value: givesName },
+    ...(withWifi && wifiOn
+      ? [{ key: 'wifi', label: 'Joins Wi-Fi', value: wifiIssue ? 'Not in the code (see Wi-Fi above)' : ssid || 'No network name yet' }]
+      : []),
+    { key: 'use', label: 'Use', value: usesText(token?.maxUses ?? uses) },
     { key: 'expires', label: 'Expires', value: expiresValue },
   ];
 
@@ -289,20 +486,20 @@ export function EnrollPage() {
 
   const configHelp = configsFailed ? (
     <>
-      Couldn&rsquo;t load the configurations, so the code uses the server&rsquo;s setting for new devices.{' '}
+      Couldn&rsquo;t load configurations, so the code uses the server default.{' '}
       <LinkButton tone="inline" onClick={loadConfigs}>
         Retry
       </LinkButton>
     </>
   ) : (
-    'New devices start with this configuration. The code and token are tied to it, so pick before you share them.'
+    'New devices start with it. The code is tied to it, so pick before you share it.'
   );
 
   const chooseCard = (
-    <Card key="choose" padding="roomy" gap={16} aria-labelledby="v2-enroll-choose" className="v2-enroll__choose">
-      <CardHeader number={1} size={17} title="Choose what the device gets" titleId="v2-enroll-choose" />
+    <Card gap={16} aria-labelledby="v2-enroll-choose" className="v2-enroll__choose">
+      <CardHeader number={1} title="Choose what the device gets" titleId="v2-enroll-choose" />
       <Field label="Configuration" help={configHelp}>
-        <Select size="lg" value={cfgId} onChange={(e) => setCfgId(e.target.value)} disabled={configs === null}>
+        <Select value={cfgId} onChange={(e) => setCfgId(e.target.value)} disabled={configs === null}>
           {configs === null ? (
             <option value={cfgId}>Loading configurations…</option>
           ) : (
@@ -319,6 +516,27 @@ export function EnrollPage() {
           )}
         </Select>
       </Field>
+
+      <div className="v2-enroll__limits">
+        <Field label="Devices" help={devicesHelp}>
+          <Select value={String(uses)} onChange={(e) => setUses(Number(e.target.value))}>
+            {USES_OPTIONS.map((n) => (
+              <option key={n} value={String(n)}>
+                {n === 1 ? 'One device' : `Up to ${n} devices`}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Valid for">
+          <Select value={String(validHours)} onChange={(e) => setValidHours(Number(e.target.value))}>
+            {VALID_OPTIONS.map((o) => (
+              <option key={o.hours} value={String(o.hours)}>
+                {o.label}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      </div>
 
       <div className="v2-enroll__wifi">
         <div className="v2-enroll__wifirow">
@@ -341,7 +559,7 @@ export function EnrollPage() {
         {wifiOn ? (
           <>
             <div className="v2-enroll__wifigrid">
-              <Field label="Network name" size="sm">
+              <Field label="Network name">
                 <Input
                   value={wifiSsid}
                   onChange={(e) => setWifiSsid(e.target.value)}
@@ -350,8 +568,12 @@ export function EnrollPage() {
                   spellCheck={false}
                 />
               </Field>
-              <Field label="Security" size="sm">
-                <Select value={wifiSec} onChange={(e) => setWifiSec(e.target.value as WifiSecurity)}>
+              <Field label="Security">
+                <Select
+                  value={wifiSec}
+                  aria-describedby={wifiIssue ? 'v2-enroll-wifi-issue' : undefined}
+                  onChange={(e) => setWifiSec(e.target.value as WifiSecurity)}
+                >
                   <option value="WPA">WPA / WPA2</option>
                   <option value="WEP">WEP</option>
                   <option value="NONE">Open</option>
@@ -359,21 +581,30 @@ export function EnrollPage() {
                 </Select>
               </Field>
               {wifiSec !== 'NONE' ? (
-                <Field label="Wi-Fi password" size="sm" className="v2-enroll__wide">
+                <Field label="Wi-Fi password" className="v2-enroll__wide">
                   <Input
                     type="password"
                     value={wifiPass}
                     onChange={(e) => setWifiPass(e.target.value)}
                     autoComplete="new-password"
+                    aria-describedby={wifiIssue ? 'v2-enroll-wifi-issue' : undefined}
                   />
                 </Field>
               ) : null}
             </div>
-            {wifiSec !== 'NONE' ? (
-              <Callout tone="warn" icon={<IconWarning size={16} />}>
-                The Wi-Fi password is written into the QR code. Anyone who photographs the code can read it.
-              </Callout>
-            ) : null}
+            {/* One live region for both notes, there while Wi-Fi is on: a note that appears or changes as the admin
+                types is read out, which a region created with its text often is not. */}
+            <div role="status" id={wifiIssue ? 'v2-enroll-wifi-issue' : undefined} className="v2-enroll__wifinote">
+              {wifiIssue ? (
+                <Callout tone="warn" icon={<IconWarning size={16} />}>
+                  {wifiIssue}
+                </Callout>
+              ) : wifiSec !== 'NONE' ? (
+                <Callout tone="warn" icon={<IconWarning size={16} />}>
+                  The Wi-Fi password is written into the QR code. Anyone who photographs the code can read it.
+                </Callout>
+              ) : null}
+            </div>
             <span className="v2-enroll__help">
               {wifiFrom ? `Filled in from ${wifiFrom}. ` : ''}Changes here only affect this code.
             </span>
@@ -391,15 +622,26 @@ export function EnrollPage() {
         onNewCode={newCode}
         newCodeBusy={busy}
         fullScreenTitle={`Scan to enroll: ${givesName}`}
-        fullScreenNote={token?.expiresAt ? `Single-use. Expires ${fmtExpiry(token.expiresAt)}.` : 'Single-use.'}
+        fullScreenNote={`${(token?.maxUses ?? 1) === 1 ? 'Single-use' : `For up to ${token?.maxUses} devices`}.${
+          token?.expiresAt ? ` Expires ${fmtExpiry(token.expiresAt)}.` : ''
+        }`}
       />
     ) : (
       <div className="v2-qr">
         <div className="v2-qr__frame v2-enroll__qrwait" role="status">
-          {busy ? 'Making a code…' : expired ? 'This code has expired.' : 'No code yet.'}
+          {busy ? (
+            <>
+              <Skeleton height="100%" className="v2-enroll__qrskel" />
+              <span className="v2-visually-hidden">Making a code…</span>
+            </>
+          ) : expired ? (
+            'This code has expired.'
+          ) : (
+            'No code yet.'
+          )}
         </div>
         <div className="v2-qr__actions">
-          <Button size="lg" icon={<IconSync size={14} />} onClick={newCode} disabled={busy}>
+          <Button icon={<IconSync size={14} />} onClick={newCode} disabled={busy}>
             {busy ? 'Making a code…' : 'New code'}
           </Button>
         </div>
@@ -407,10 +649,9 @@ export function EnrollPage() {
     );
 
   const enrollCard = (
-    <Card key="enroll" padding="roomy" gap={16} aria-labelledby="v2-enroll-device" className="v2-enroll__device">
+    <Card gap={16} aria-labelledby="v2-enroll-device" className="v2-enroll__device">
       <CardHeader
         number={2}
-        size={17}
         title="Enroll the device"
         titleId="v2-enroll-device"
         actions={
@@ -427,12 +668,18 @@ export function EnrollPage() {
           />
         }
       />
+      {/* Pre-flight problems, not failures: amber (nothing has gone wrong yet; the admin can still fix it here). */}
+      {address ? (
+        <Callout tone="warn" icon={<IconWarning size={16} />} role="status">
+          {address.text}
+        </Callout>
+      ) : null}
       {tokError ? (
-        <Callout tone="alert" role="alert">
-          {tokError}{' '}
-          <LinkButton tone="inline" onClick={newCode} disabled={busy}>
-            Try again
-          </LinkButton>
+        <Callout tone="alert" role="alert" icon={<IconAlert />} className="v2-errorstate">
+          <span className="v2-errorstate__text">{tokError}</span>
+          <Button size="sm" onClick={newCode} disabled={busy}>
+            Retry
+          </Button>
         </Callout>
       ) : null}
       {expired && !busy ? (
@@ -440,14 +687,25 @@ export function EnrollPage() {
           This code has expired. Make a new one before you enroll a device.
         </Callout>
       ) : null}
+      {replaced && !(replaced.until && replaced.until <= now) ? (
+        <Callout tone="warn" icon={<IconWarning size={16} />} role="status">
+          {replacedText(replaced)}{' '}
+          <LinkButton tone="inline" onClick={openStop}>
+            Stop all codes
+          </LinkButton>
+        </Callout>
+      ) : null}
       <TabPanel idBase={METHOD_TABS} tabKey={method} className="v2-enroll__panel">
         {method === 'qr' ? (
-          <div className="v2-enroll__cols">
-            {qrPanel}
-            <div className="v2-enroll__info">
-              <KeyValueList variant="facts" items={facts(true)} />
-              <NumberedSteps steps={qrSteps(wifiInCode)} />
+          <div className="v2-enroll__qrtab">
+            <div className="v2-enroll__cols">
+              {qrPanel}
+              <KeyValueList variant="facts" items={facts(true)} className="v2-enroll__facts" />
             </div>
+            <details className="v2-enroll__how">
+              <summary>How to scan the code</summary>
+              <NumberedSteps steps={qrSteps(wifiInCode)} />
+            </details>
           </div>
         ) : (
           <div className="v2-enroll__token">
@@ -458,13 +716,18 @@ export function EnrollPage() {
                   onCopied={() => toast.push('ok', 'Token copied', 'Enrollment token copied to clipboard.')}
                 />
               </Field>
+            ) : busy ? (
+              <div role="status" className="v2-enroll__tokenwait">
+                <Skeleton height="control" />
+                <span className="v2-visually-hidden">Making a token…</span>
+              </div>
             ) : (
-              <p className="v2-enroll__tokenwait" role="status">
-                {busy ? 'Making a token…' : expired ? 'This token has expired.' : 'No token yet.'}
-              </p>
+              <span className="v2-enroll__tokenwait" role="status">
+                {expired ? 'This token has expired.' : 'No token yet.'}
+              </span>
             )}
             <div>
-              <Button size="lg" icon={<IconSync size={14} />} onClick={newCode} disabled={busy}>
+              <Button icon={<IconSync size={14} />} onClick={newCode} disabled={busy}>
                 {busy && token ? 'Making a token…' : 'New token'}
               </Button>
             </div>
@@ -472,12 +735,69 @@ export function EnrollPage() {
             <p className="v2-enroll__note">
               For headless or scripted provisioning: pass it as{' '}
               <span className="v2-mono">com.mdmesh.ENROLL_TOKEN</span>, with{' '}
-              <span className="v2-mono">com.mdmesh.SERVER_URL</span> set to the server below. Scanning the QR code is
-              the usual way.
+              <span className="v2-mono">com.mdmesh.SERVER_URL</span> set to the server address. Scanning the QR code
+              is the usual way.
             </p>
           </div>
         )}
       </TabPanel>
+      {/* Not the list: a look every 5 s would re-read all of it. Each new device or change of state, once. */}
+      <div className="v2-visually-hidden" role="status">
+        {arrivalSaid.map((n) => (
+          <p key={n.id}>{n.text}</p>
+        ))}
+      </div>
+    </Card>
+  );
+
+  const arrivalsCard = (
+    <Card gap={12} aria-labelledby="v2-enroll-arrivals" className="v2-enroll__arrivals">
+      <div className="v2-cardhead">
+        <div className="v2-cardhead__text">
+          <h2 id="v2-enroll-arrivals" className="v2-cardhead__title v2-enroll__arrivalshead" tabIndex={-1} ref={arrivalsHead}>
+            Enrolled while this page is open
+          </h2>
+        </div>
+      </div>
+      {!watching ? (
+        <span className="v2-enroll__help">
+          Stopped looking for new devices after 30 minutes.{' '}
+          <LinkButton tone="inline" onClick={lookAgain}>
+            Look again
+          </LinkButton>
+        </span>
+      ) : null}
+      {arrivals.length === 0 ? (
+        watching ? (
+          <span className="v2-enroll__help">No device yet. A device shows here within seconds of enrolling.</span>
+        ) : null
+      ) : (
+        <ul className="v2-enroll__arrivallist" aria-labelledby="v2-enroll-arrivals">
+          {arrivals.map((a) => (
+            <li key={a.number}>
+              <Link to={paths.device(a.number)}>{a.name}</Link>
+              <span className={`v2-enroll__arrival v2-enroll__arrival--${a.state}`}>{ARRIVAL_LABEL[a.state]}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+
+  const codesCard = (
+    <Card gap={12} aria-labelledby="v2-enroll-codes" className="v2-enroll__codes">
+      <CardHeader
+        title="Enrollment codes"
+        titleId="v2-enroll-codes"
+        actions={
+          <Button size="sm" variant="danger" onClick={openStop}>
+            Stop all codes
+          </Button>
+        }
+      />
+      <span className="v2-enroll__help">
+        A code shared further than meant? Stop every code that still works; enrolled devices stay enrolled.
+      </span>
       {!RELEASE_BUILD ? (
         <Callout tone="warn" icon={<IconWarning size={16} />}>
           No verified agent release was found when this console was built, so the code expects the debug build of
@@ -497,18 +817,59 @@ export function EnrollPage() {
         {agentVersion ? (
           <div>
             <dt>Version</dt>
-            <dd className="v2-mono">{agentVersion}</dd>
+            <dd>{agentVersion}</dd>
           </div>
         ) : null}
       </dl>
     </Card>
   );
 
+  // Devices enrolled with a code from this page show once there is a code, on a server that can list them.
+  const showArrivals = since != null && !arrivalsUnsupported;
+  const setupCells = [
+    <GridCell key="choose" span={6}>
+      {chooseCard}
+    </GridCell>,
+    <GridCell key="enroll" span={6}>
+      {enrollCard}
+    </GridCell>,
+  ];
+
   return (
     <>
       <PageHeader title="Enroll a device" subtitle="Set up a new or factory-reset Android device so MDMesh manages it." />
-      {/* QR first on phones: the person is usually holding the device to scan. */}
-      <div className="v2-enroll">{mobile ? [enrollCard, chooseCard] : [chooseCard, enrollCard]}</div>
+      <Grid className="v2-enroll">
+        {/* QR first on phones: the person is usually holding the device to scan. */}
+        {mobile ? setupCells.reverse() : setupCells}
+        {showArrivals ? <GridCell span={6}>{arrivalsCard}</GridCell> : null}
+        <GridCell span={showArrivals ? 6 : 12}>{codesCard}</GridCell>
+      </Grid>
+      <Modal
+        open={stopOpen}
+        size="sm"
+        role="alertdialog"
+        title="Stop all enrollment codes?"
+        description="Every code that still works stops now: this one, codes you replaced, and codes other admins made, printed or shared ones too. Devices already enrolled stay enrolled. A new code is made for your choices."
+        onClose={() => {
+          if (!stopping) setStopOpen(false);
+        }}
+        footer={
+          <>
+            <Button size="lg" disabled={stopping} onClick={() => setStopOpen(false)}>
+              Cancel
+            </Button>
+            <Button size="lg" variant="danger-primary" disabled={stopping} onClick={() => void stopAll()}>
+              {stopping ? 'Stopping…' : 'Stop all codes'}
+            </Button>
+          </>
+        }
+      >
+        {stopError ? (
+          <Callout tone="alert" role="alert">
+            {stopError}
+          </Callout>
+        ) : null}
+      </Modal>
     </>
   );
 }

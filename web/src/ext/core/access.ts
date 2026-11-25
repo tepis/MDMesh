@@ -18,7 +18,9 @@ const EDIT_DEVICES = { permission: 'edit_devices' } as const satisfies Requireme
  *   GET /update/status) and the Rollout reads are open. Its changes check for themselves: the rollout's need
  *   edit_devices and the whole fleet. Checking for, installing and scheduling updates follow no permission but
  *   v0.3.8's deploymentAdmin rule (a super-admin, or the org admin of a single-customer install), which the supervisor
- *   asks the server about; the console reads it with auth/useMayManageDeployment.
+ *   asks the server about; the console reads it with auth/useMayManageDeployment. Users & roles makes
+ *   Settings' one guarded read (UserResource GET /management, then /all), only for a role with `manageUsers` below;
+ *   without it, or when the server says the account administers nothing, the section is left out.
  *
  * The open pages also make optional reads that are guarded, and get less without them, but still work: Overview
  * reads the app library (`applications`) for app names, and shows package names instead; Devices reads the
@@ -52,6 +54,12 @@ export const CORE_ACTION_ACCESS = {
    */
   editDevices: EDIT_DEVICES,
   /**
+   * Settings' Users & roles section. UserResource GET /all and GET /{id} check settings; GET /management says whether
+   * the account administers users (a super-admin or an org admin) and roles. The writes check that for themselves
+   * (UserResource PUT / and DELETE /other/{id}, UserRoleResource).
+   */
+  manageUsers: { permission: 'settings' },
+  /**
    * Settings' rollout buttons. RolloutResource checks edit_devices for starting, promoting, finishing and cancelling
    * an agent rollout, and then canReachWholeFleet: a user limited to some device groups may not, as the one active
    * rollout is the whole fleet's.
@@ -62,7 +70,7 @@ export const CORE_ACTION_ACCESS = {
    * 26.10.13).
    */
   renameDevice: { permission: 'edit_device_desc' },
-  /** The library's "Remove from library…": ApplicationResource DELETE /{id} checks edit_applications. */
+  /** The library's "Remove from library": ApplicationResource DELETE /{id} checks edit_applications. */
   removeApp: { permission: 'edit_applications' },
   /**
    * Deploy's "Add to a configuration": ApplicationResource POST /configurations checks edit_applications. Its picker
@@ -71,7 +79,7 @@ export const CORE_ACTION_ACCESS = {
    */
   addToConfiguration: { permission: 'edit_applications' },
   /**
-   * "SHA-256 checksum…" and the missing-checksum notice's "Add checksum": ApplicationResource
+   * "SHA-256 checksum" and the missing-checksum notice's "Add checksum": ApplicationResource
    * PUT /versions/{id}/sha256 checks edit_application_versions.
    */
   setAppChecksum: { permission: 'edit_application_versions' },

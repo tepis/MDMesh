@@ -1,12 +1,29 @@
 package com.mdmesh.core.store
 
 import com.mdmesh.proto.ConfigApplyPayload
+import com.mdmesh.proto.ConfigAppPermissions
 import com.mdmesh.proto.ConfigConnectivity
+import com.mdmesh.proto.KioskApplyPayload
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
 class ConfigStateStoreTest {
+    @Test
+    fun `configured kiosk flow follows delivered documents including kiosk-off and legacy saved fallback`() = runTest {
+        val store = InMemoryConfigStateStore()
+        assertNull(store.configuredKioskFlow().first())
+        val kiosk = KioskApplyPayload(password = "staff-pin")
+        store.save(ConfigApplyPayload(revision = "saved", kiosk = kiosk))
+        assertEquals(kiosk, store.configuredKioskFlow().first())
+        store.delivered = ConfigApplyPayload(revision = "off")
+        assertNull(store.configuredKioskFlow().first())
+        store.save(ConfigApplyPayload(revision = "saved", kiosk = kiosk))
+        assertNull("old saved kiosk cannot override a newer delivered off", store.configuredKioskFlow().first())
+    }
+
     @Test
     fun `save load revision clear`() {
         val s = InMemoryConfigStateStore()
@@ -19,6 +36,9 @@ class ConfigStateStoreTest {
         assertEquals(mapOf("wifi" to true), s.load()?.policies)
         s.clear()
         assertNull(s.revision())
+        assertNull(s.delivered)
+        assertEquals(emptyList<ConfigAppPermissions>(), s.activeAppPermissions)
+        assertEquals(emptySet<String>(), s.unreleased)
     }
 
     @Test

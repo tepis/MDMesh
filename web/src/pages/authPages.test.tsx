@@ -1,5 +1,5 @@
 // The sign-in, set-password and change-password forms' answers to the server's v0.3.8 and v0.3.9 refusals: the sign-in
-// limit (LoginThrottle) says so instead of "Wrong login or password." (the current-password check of a password change
+// limit (LoginThrottle) says so instead of "Wrong username or password." (the current-password check of a password change
 // counts too), and a reset token the server no longer takes (it works once, for 24 hours) sends the flagged session
 // back to sign in, which issues a fresh one.
 import { fireEvent, screen, waitFor } from '@testing-library/react';
@@ -11,7 +11,6 @@ import { LoginPage } from './LoginPage';
 import { SetPasswordPage } from './SetPasswordPage';
 import { ChangePasswordModal } from './settings/ChangePasswordModal';
 
-const LOAD = { timeout: 3000 };
 
 /** Every call answers `answer(path)`: an envelope, or an HTTP status with no body. */
 function stubServer(answer: (path: string) => { status?: string; message?: string; data?: unknown } | number) {
@@ -28,7 +27,7 @@ function stubServer(answer: (path: string) => { status?: string; message?: strin
 }
 
 function signInWith(login: string, password: string) {
-  fireEvent.change(screen.getByLabelText('Login'), { target: { value: login } });
+  fireEvent.change(screen.getByLabelText('Username'), { target: { value: login } });
   fireEvent.change(screen.getByLabelText('Password'), { target: { value: password } });
   fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
 }
@@ -45,7 +44,7 @@ describe('Sign in', () => {
 
     signInWith('admin', 'guess');
 
-    const alert = await screen.findByRole('alert', undefined, LOAD);
+    const alert = await screen.findByRole('alert');
     expect(alert.textContent).toBe('Too many failed sign-ins. Wait a few minutes, then try again.');
   });
 
@@ -55,16 +54,16 @@ describe('Sign in', () => {
 
     signInWith('admin', 'guess');
 
-    expect((await screen.findByRole('alert', undefined, LOAD)).textContent).toMatch(/^Too many failed sign-ins\./);
+    expect((await screen.findByRole('alert')).textContent).toMatch(/^Too many failed sign-ins\./);
   });
 
-  it('still says "Wrong login or password." for any other refusal', async () => {
+  it('still says "Wrong username or password." for any other refusal', async () => {
     stubServer((p) => (p.includes('/public/auth/login') ? { status: 'ERROR', message: null as unknown as string } : {}));
     renderInConsole(<LoginPage />, { user: null, path: '/login' });
 
     signInWith('admin', 'wrong');
 
-    expect((await screen.findByRole('alert', undefined, LOAD)).textContent).toBe('Wrong login or password.');
+    expect((await screen.findByRole('alert')).textContent).toBe('Wrong username or password.');
   });
 });
 
@@ -99,14 +98,14 @@ describe('Set password', () => {
           : {},
     );
     renderFlagged();
-    await screen.findByLabelText('New password', undefined, LOAD);
+    await screen.findByLabelText('New password');
     fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'long-enough-1' } });
     fireEvent.change(screen.getByLabelText('Type it again'), { target: { value: 'long-enough-1' } });
     fireEvent.click(screen.getByRole('button', { name: /Set password/ }));
 
     await waitFor(() =>
       expect(screen.getByRole('status').textContent).toBe('That password change expired. Sign in again to set your password.'),
-    LOAD);
+    );
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy();
   });
 });
@@ -116,13 +115,13 @@ describe('Change password (Settings)', () => {
     stubServer((p) => (p.includes('/private/users/current') ? { status: 'ERROR', message: 'error.auth.too.many.attempts' } : {}));
     renderInConsole(<ChangePasswordModal open user={{ id: 12, login: 'admin' }} onClose={() => {}} />, { path: '/settings' });
 
-    fireEvent.change(await screen.findByLabelText('Current password', undefined, LOAD), { target: { value: 'guess-one' } });
+    fireEvent.change(await screen.findByLabelText('Current password'), { target: { value: 'guess-one' } });
     fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'long-enough-1' } });
     fireEvent.change(screen.getByLabelText('Type it again'), { target: { value: 'long-enough-1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Change password' }));
 
     await waitFor(() =>
       expect(screen.getByText('Too many failed sign-ins. Wait a few minutes, then try again.')).toBeTruthy(),
-    LOAD);
+    );
   });
 });

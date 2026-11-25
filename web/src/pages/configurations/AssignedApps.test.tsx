@@ -2,13 +2,13 @@
 // edits made through them, the changed count, Discard and the save are the same as without them. Rendered through the
 // real routes against a stubbed API.
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { chooseOption, selectValue } from '../../test/select';
 import { describe, expect, it, vi } from 'vitest';
 import type { ConfigApp } from '../../api/configurations';
 import { AppRoutes } from '../../App';
 import { renderInConsole } from '../../test/console';
 import { APP_CONTROLS_THRESHOLD } from './AssignedApps';
 
-const LOAD = { timeout: 3000 };
 
 /** [id, name, pkg, action] — 6 Install, 2 Do not install, 2 Remove; stored in this (unsorted) order. */
 const TEN: Array<[number, string, string, number]> = [
@@ -28,7 +28,7 @@ const assigned = (list = TEN): ConfigApp[] =>
   list.map(([id, name, pkg, action]) => ({ id, name, pkg, version: '1.0', action, showIcon: true, usedVersionId: 100 + id, remove: false }));
 
 /** Configuration 7 with `apps` assigned, and one more app in the library (Agenda) to add. */
-function open(apps = assigned()) {
+function open(apps = assigned(), configuration: Record<string, unknown> = {}) {
   const puts: Record<string, unknown>[] = [];
   const answer = (path: string, init?: RequestInit): unknown => {
     const p = new URL(path, 'http://console').pathname.replace('/rest', '');
@@ -37,7 +37,7 @@ function open(apps = assigned()) {
       puts.push(body);
       return body;
     }
-    if (p === '/private/configurations/7') return { id: 7, name: 'Warehouse', kioskMode: false, extensions: {} };
+    if (p === '/private/configurations/7') return { id: 7, name: 'Warehouse', kioskMode: false, extensions: {}, ...configuration };
     if (p === '/private/configurations/applications/7') return apps.map((a) => ({ ...a, selected: true }));
     if (p.startsWith('/private/applications/search')) {
       return [{ id: 11, name: 'Agenda', pkg: 'com.acme.agenda', version: '2.0', type: 'app', latestVersion: 111 }];
@@ -61,20 +61,17 @@ function open(apps = assigned()) {
   return { puts };
 }
 
-const table = () => document.querySelector<HTMLTableElement>('.v2-cfged-apps__table')!;
+const table = () => document.querySelector<HTMLTableElement>('.v2-cfged-apps table')!;
 /** The app names in the table, in order. */
 const names = () => [...table().querySelectorAll('.v2-cfged-app__name')].map((n) => n.firstChild?.textContent);
 const search = () => screen.getByRole<HTMLInputElement>('searchbox', { name: 'Search assigned apps' });
 const filter = () => screen.getByRole('radiogroup', { name: 'On devices' });
 const pick = (name: RegExp) => fireEvent.click(within(filter()).getByRole('radio', { name }));
-const sortBy = (label: string) =>
-  fireEvent.change(screen.getByRole('combobox', { name: 'Sort' }), {
-    target: { value: { Name: 'name', Package: 'pkg', 'On devices': 'state' }[label] },
-  });
-const actionOf = (name: string) => screen.getByRole<HTMLSelectElement>('combobox', { name: `What happens to ${name}` });
+const sortBy = (label: string) => chooseOption(screen.getByRole('combobox', { name: 'Sort' }), label);
+const actionOf = (name: string) => screen.getByRole('combobox', { name: `What happens to ${name}` });
 const saveBar = () => screen.queryByRole('region', { name: 'Unsaved changes' });
 const live = () => document.querySelector('.v2-cfged-appsbar [aria-live="polite"]')!;
-const loaded = () => screen.findByRole('combobox', { name: 'What happens to Chrome' }, LOAD);
+const loaded = () => screen.findByRole('combobox', { name: 'What happens to Chrome' });
 
 async function save() {
   const button = within(saveBar()!).getByRole<HTMLButtonElement>('button', { name: 'Save and apply' });
@@ -83,6 +80,60 @@ async function save() {
 }
 
 describe('assigned apps: search, filter and sort', () => {
+  it('keeps an app permission disclosure inside that app’s table row', async () => {
+    const chrome = assigned(TEN.slice(0, 1));
+    chrome[0].requestedPermissions = 'android.permission.CAMERA';
+    open(chrome);
+    await loaded();
+
+    const row = screen.getByText('Chrome', { selector: '.v2-cfged-app__name' }).closest('tr')!;
+    expect(table().tBodies[0].rows).toHaveLength(1);
+    expect(row.querySelector('.v2-cfged-app__text .v2-cfged-permission-app')).toBeTruthy();
+    expect(within(row).getByText('Permissions · 1 available')).toBeTruthy();
+
+    fireEvent.click(within(row).getByText('Permissions · 1 available'));
+    expect(within(row).getByText('Camera')).toBeTruthy();
+    expect(table().tBodies[0].rows).toHaveLength(1);
+  });
+
+  it('setting a permission back to what it was leaves no unsaved change', async () => {
+    const chrome = assigned(TEN.slice(0, 1));
+    chrome[0].requestedPermissions = 'android.permission.CAMERA,android.permission.RECORD_AUDIO';
+    open(chrome, {
+      managedAppPermissions: [
+        { applicationId: 1, permission: 'android.permission.CAMERA', state: 'deny' },
+        { applicationId: 1, permission: 'android.permission.RECORD_AUDIO', state: 'grant' },
+      ],
+    });
+    await loaded();
+    const row = screen.getByText('Chrome', { selector: '.v2-cfged-app__name' }).closest('tr')!;
+    const camera = within(row).getByRole('combobox', { name: /Camera/ });
+    chooseOption(camera, { value: 'default' });
+    expect(saveBar()?.textContent).toContain('1 unsaved change');
+    // Deny again: the rule is back, now after RECORD_AUDIO in the list.
+    chooseOption(camera, { value: 'deny' });
+    await waitFor(() => expect(saveBar()).toBeNull());
+  });
+
+  it('drops permission rules when an app is removed or no longer installed', async () => {
+    const chrome = assigned(TEN.slice(0, 1));
+    const rule = { applicationId: 1, permission: 'android.permission.CAMERA', state: 'deny' };
+    const first = open(chrome, { managedAppPermissions: [rule] });
+    await loaded();
+    chooseOption(actionOf('Chrome'), { value: '0' });
+    await save();
+    await waitFor(() => expect(first.puts).toHaveLength(1));
+    expect(first.puts[0].managedAppPermissions).toEqual([]);
+    cleanup();
+
+    const second = open(chrome, { managedAppPermissions: [rule] });
+    await loaded();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Chrome' }));
+    await save();
+    await waitFor(() => expect(second.puts).toHaveLength(1));
+    expect(second.puts[0].managedAppPermissions).toEqual([]);
+  });
+
   it('shows no controls for a list of the threshold or fewer, in stored order', async () => {
     open(assigned(TEN.slice(0, APP_CONTROLS_THRESHOLD)));
     await loaded();
@@ -151,10 +202,10 @@ describe('assigned apps: search, filter and sort', () => {
     await loaded();
     pick(/^Install/);
     expect(names()).toHaveLength(6);
-    fireEvent.change(actionOf('Chrome'), { target: { value: '2' } });
+    chooseOption(actionOf('Chrome'), { value: '2' });
     // Still there, with its new state; the counts follow the edit.
     expect(names()).toContain('Chrome');
-    expect(actionOf('Chrome').value).toBe('2');
+    expect(selectValue(actionOf('Chrome'))).toBe('2');
     expect(within(filter()).getAllByRole('radio').map((r) => r.textContent)).toEqual(['All 10', 'Install 5', 'Do not install 2', 'Remove 3']);
     expect(saveBar()?.textContent).toContain('1 unsaved change');
     // A new view files it by its new state.
@@ -164,7 +215,7 @@ describe('assigned apps: search, filter and sort', () => {
     expect(names()).not.toContain('Chrome');
     // The edit is still there under All.
     pick(/^All/);
-    expect(actionOf('Chrome').value).toBe('2');
+    expect(selectValue(actionOf('Chrome'))).toBe('2');
     expect(saveBar()?.textContent).toContain('1 unsaved change');
   });
 
@@ -172,7 +223,7 @@ describe('assigned apps: search, filter and sort', () => {
     open();
     await loaded();
     sortBy('On devices');
-    fireEvent.change(actionOf('Chrome'), { target: { value: '2' } });
+    chooseOption(actionOf('Chrome'), { value: '2' });
     expect(names()[0]).toBe('Chrome');
     sortBy('Name');
     sortBy('On devices');
@@ -184,8 +235,8 @@ describe('assigned apps: search, filter and sort', () => {
     await loaded();
     pick(/^Remove/);
     fireEvent.click(screen.getByRole('button', { name: 'Add apps' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Add apps' }, LOAD);
-    fireEvent.click(await within(dialog).findByRole('checkbox', { name: /Agenda/ }, LOAD));
+    const dialog = await screen.findByRole('dialog', { name: 'Add apps' });
+    fireEvent.click(await within(dialog).findByRole('checkbox', { name: /Agenda/ }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add 1' }));
     await waitFor(() => expect(names()).toEqual(['Agenda', 'Barcode Reader', 'Wallet']));
     pick(/^Install/);
@@ -210,7 +261,7 @@ describe('assigned apps: search, filter and sort', () => {
     open();
     await loaded();
     pick(/^Install/);
-    fireEvent.change(actionOf('Chrome'), { target: { value: '0' } });
+    chooseOption(actionOf('Chrome'), { value: '0' });
     fireEvent.click(screen.getByRole('button', { name: 'Remove Maps' }));
     // A new view files Chrome under Do not install: Install no longer shows it.
     pick(/^Remove/);
@@ -220,7 +271,7 @@ describe('assigned apps: search, filter and sort', () => {
     fireEvent.click(within(saveBar()!).getByRole('button', { name: 'Discard' }));
     await waitFor(() => expect(saveBar()).toBeNull());
     expect(names()).toEqual(['Chrome', 'Field Ops', 'Maps', 'Notes', 'Signage Player', 'Zebra DataWedge']);
-    expect(actionOf('Chrome').value).toBe('1');
+    expect(selectValue(actionOf('Chrome'))).toBe('1');
   });
 
   it('starts the view again when the list drops to the threshold and grows past it', async () => {
@@ -233,11 +284,11 @@ describe('assigned apps: search, filter and sort', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove Barcode Reader' }));
     expect(screen.queryByRole('radiogroup', { name: 'On devices' })).toBeNull();
     expect(names()).toHaveLength(APP_CONTROLS_THRESHOLD);
-    fireEvent.change(actionOf('Microsoft Teams'), { target: { value: '2' } });
+    chooseOption(actionOf('Microsoft Teams'), { value: '2' });
     // Past it again: no search or filter left from before, and the filter sees the state changed meanwhile.
     fireEvent.click(screen.getByRole('button', { name: 'Add apps' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Add apps' }, LOAD);
-    fireEvent.click(await within(dialog).findByRole('checkbox', { name: /Agenda/ }, LOAD));
+    const dialog = await screen.findByRole('dialog', { name: 'Add apps' });
+    fireEvent.click(await within(dialog).findByRole('checkbox', { name: /Agenda/ }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add 1' }));
     await waitFor(() => expect(screen.queryByRole('radiogroup', { name: 'On devices' })).toBeTruthy());
     expect(search().value).toBe('');
@@ -251,9 +302,9 @@ describe('assigned apps: search, filter and sort', () => {
     open();
     await loaded();
     pick(/^Install/);
-    fireEvent.change(actionOf('Chrome'), { target: { value: '2' } });
+    chooseOption(actionOf('Chrome'), { value: '2' });
     // Sort is already Name; Segmented reports its focused option again on Home/End (here: Install).
-    fireEvent.change(screen.getByRole('combobox', { name: 'Sort' }), { target: { value: 'name' } });
+    sortBy('Name');
     expect(names()).toContain('Chrome');
     pick(/^Do not install/);
     pick(/^Install/);
@@ -263,7 +314,7 @@ describe('assigned apps: search, filter and sort', () => {
   it('saves every assigned app, with the edits, whatever the search and filter show', async () => {
     const plain = open();
     await loaded();
-    fireEvent.change(actionOf('Wallet'), { target: { value: '1' } });
+    chooseOption(actionOf('Wallet'), { value: '1' });
     await save();
     await waitFor(() => expect(plain.puts).toHaveLength(1));
     expect((plain.puts[0].applications as ConfigApp[]).length).toBe(10);
@@ -273,7 +324,7 @@ describe('assigned apps: search, filter and sort', () => {
     await loaded();
     pick(/^Remove/);
     fireEvent.change(search(), { target: { value: 'wallet' } });
-    fireEvent.change(actionOf('Wallet'), { target: { value: '1' } });
+    chooseOption(actionOf('Wallet'), { value: '1' });
     expect(names()).toEqual(['Wallet']);
     await save();
     await waitFor(() => expect(filtered.puts).toHaveLength(1));

@@ -5,8 +5,8 @@ import { classifyOutcome, outcomeSummary } from './configOutcomes';
 
 const COMMAND_NAMES: Record<string, string> = {
   'config.apply': 'Apply configuration',
-  'device.lock': 'Lock device',
-  'device.reboot': 'Reboot device',
+  'device.lock': 'Lock',
+  'device.reboot': 'Reboot',
   'device.wipe': 'Factory reset',
   'device.passcodeReset': 'Reset passcode',
   'device.alert': 'Send alert',
@@ -17,6 +17,7 @@ const COMMAND_NAMES: Record<string, string> = {
   'device.locationMode': 'Location mode',
   'kiosk.enter': 'Enter kiosk',
   'kiosk.exit': 'Exit kiosk',
+  'kiosk.clearPinLockout': 'Clear PIN lockout',
   'app.install': 'Install app',
   'app.uninstall': 'Uninstall app',
   'apps.scan': 'Scan apps',
@@ -77,6 +78,9 @@ export const EVENT_LABELS: Record<string, string> = {
   enrolled: 'Enrolled',
   kioskPinLockout: 'Exit PIN locked',
   kioskCrashLoop: 'Kiosk app keeps closing',
+  wipeNotStarted: 'Factory reset didn’t start',
+  storageRecovered: 'Storage recovered',
+  configReapplyFailed: 'Config re-apply failed',
 };
 
 /** The same events as a verb phrase after the device name ("KIOSK-FRONT booted"), the v0.3 console's Dashboard wording. */
@@ -90,6 +94,9 @@ export const EVENT_VERBS: Record<string, string> = {
   enrolled: 'enrolled',
   kioskPinLockout: 'locked the exit PIN',
   kioskCrashLoop: 'reported the kiosk app keeps closing',
+  wipeNotStarted: 'didn’t start its factory reset',
+  storageRecovered: 'recovered damaged storage',
+  configReapplyFailed: 'failed to re-apply its configuration',
 };
 
 /** A commandResult event's detail is "<commandId>:<status>" (agent CheckInCoordinator); null for anything else. */

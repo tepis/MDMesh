@@ -9,7 +9,9 @@ import { CONFIG_FIELDS } from './configFields';
  * The configuration's own help for the exit PIN, so every kiosk dialog says the same: with agent 0.3.6+, an empty PIN
  * means no exit on the device.
  */
-export const EXIT_PIN_HELP = CONFIG_FIELDS.find((f) => f.key === 'password')?.help;
+const PIN_FIELD = CONFIG_FIELDS.find((f) => f.key === 'password');
+/** The exit PIN's help, its one line and its longer explanation, for tooltips beside a PIN field. */
+export const EXIT_PIN_HELP = [PIN_FIELD?.help, PIN_FIELD?.more].filter(Boolean).join(' ') || undefined;
 /** Placeholder of an exit-PIN input that may stay empty. */
 export const EXIT_PIN_PLACEHOLDER = 'Empty: no exit on the device (agent 0.3.6+)';
 /** What a kiosk without an exit PIN means on the device, by agent version. */
@@ -27,6 +29,8 @@ export type KioskTheme = {
   backgroundColor?: string;
   textColor?: string;
   iconSize?: string;
+  /** Optional server-managed launcher image; agent validates HTTPS and SHA-256 before using it. */
+  backgroundImage?: { url: string; sha256: string; fit?: 'fit'; focalX?: number; focalY?: number };
 };
 
 /** The `kiosk.enter` payload (KioskApplyPayload): also the `kiosk` block of a `config.apply` document. */
@@ -143,6 +147,17 @@ export function configuredKiosk(cfg: Configuration, apps: ConfigApp[]): Configur
   };
 }
 
+/**
+ * The `kiosk.enter` payload to queue for a configured kiosk (Return to configured kiosk), as JSON. It carries no PIN:
+ * `configuredPin` asks the server to put in each target device's own configuration PIN, so a stored PIN never travels
+ * from the console and the server has nothing to check it against (AgentAdminResource, KioskExitPin).
+ */
+export function configuredKioskCommand(k: ConfiguredKiosk): string {
+  const payload: Record<string, unknown> = { ...k.payload, configuredPin: true };
+  delete payload.password;
+  return JSON.stringify(payload);
+}
+
 /** "Pinned to Signage Player" / "Launcher grid with 3 apps": what the configured kiosk shows. */
 export function configuredKioskSummary(k: ConfiguredKiosk): string {
   if (k.payload.mode === 'single') return `Pinned to ${k.apps[0]?.name ?? k.payload.pinPackage}`;
@@ -185,15 +200,24 @@ export function configuredKioskState({
   history,
   kioskActive,
   inSync,
+  kioskGeneration,
+  kioskReturnGeneration,
   configuredIds,
 }: {
   history: CommandHistoryItem[];
   kioskActive: boolean | undefined;
   /** The device runs the configuration's current revision (configStatus.inSync). */
   inSync: boolean | undefined;
+  /** Server-owned generations, which are neither paged nor device-clock based. */
+  kioskGeneration: number | null | undefined;
+  kioskReturnGeneration: number | null | undefined;
   configuredIds: ReadonlySet<string>;
 }): ConfiguredKioskState {
   const last = lastKioskCommand(history);
+  // A local return records the current server-owned generation. A later Custom kiosk, exit, or configuration apply
+  // advances it, making Return available again. This avoids deriving state from a device-clock event or a paged list.
+  if (kioskGeneration != null && kioskReturnGeneration === kioskGeneration
+      && kioskActive === true && inSync === true) return 'active';
   if (!last) return 'ready';
   const fromConfig = last.type === 'config.apply';
   const configured = fromConfig || (last.type === 'kiosk.enter' && configuredIds.has(String(last.id)));
@@ -242,15 +266,38 @@ export function versionAtLeast(version: string | null | undefined, min: string):
 /** The agent release whose kiosk honours features.lockVolume (protocol 1.4); older agents ignore it. */
 export const LOCK_VOLUME_AGENT = '0.3.4';
 
-/** The assigned configuration's launcher theme (colours, icon size), or undefined when it sets none. */
+/** Fit and focal point as config.apply 1.10 sends them: only when not the default (fill, centre). */
+function imagePlacement(c: Configuration): { fit?: 'fit'; focalX?: number; focalY?: number } {
+  if (c.backgroundImageFit === 'fit') return { fit: 'fit' };
+  const x = typeof c.backgroundImageFocalX === 'number' ? c.backgroundImageFocalX : 0.5;
+  const y = typeof c.backgroundImageFocalY === 'number' ? c.backgroundImageFocalY : 0.5;
+  return x !== 0.5 || y !== 0.5 ? { focalX: x, focalY: y } : {};
+}
+
+/** The assigned configuration's launcher theme, including a complete managed-image descriptor when present. */
 export function kioskTheme(configuration: Configuration | undefined): KioskTheme | undefined {
   if (!configuration) return undefined;
   const value = (key: 'backgroundColor' | 'textColor' | 'iconSize') =>
     typeof configuration[key] === 'string' ? (configuration[key] as string) : undefined;
+  const imageUrl = typeof configuration.backgroundImageUrl === 'string' ? configuration.backgroundImageUrl.trim() : '';
+  const imageSha256 = typeof configuration.backgroundImageSha256 === 'string'
+    ? configuration.backgroundImageSha256.trim().toLowerCase()
+    : '';
+  // Only a managed image, as config.apply sends it (DesiredConfigBuilder): an uploaded file with the digest the server
+  // computed; never a legacy backgroundImageUrl (the Headwind wallpaper, no file and no digest). The stored URL goes
+  // out whatever its scheme: it is the address of the day the image was picked, and the server replaces it with the
+  // one built from its current base URL as it queues kiosk.enter (KioskCommandImages), as config.apply does. Agents
+  // download over HTTPS only and keep the color otherwise.
+  const managed = typeof configuration.backgroundImageFileId === 'number' && imageUrl !== ''
+    && /^[0-9a-f]{64}$/.test(imageSha256);
+  const backgroundImage = managed
+    ? { url: imageUrl, sha256: imageSha256, ...imagePlacement(configuration) }
+    : undefined;
   const theme = {
     backgroundColor: value('backgroundColor'),
     textColor: value('textColor'),
     iconSize: value('iconSize'),
+    ...(backgroundImage ? { backgroundImage } : {}),
   };
   return Object.values(theme).some((v) => v !== undefined) ? theme : undefined;
 }

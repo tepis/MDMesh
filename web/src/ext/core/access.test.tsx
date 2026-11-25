@@ -6,7 +6,6 @@ import type { AuthUser } from '../../api/auth';
 import { AppRoutes } from '../../App';
 import { ROLES, renderInConsole, stubApi } from '../../test/console';
 
-const LOAD = { timeout: 3000 };
 const NOW = Date.now();
 const DEVICE = { id: 7, number: 'WH-1', description: 'Front desk', configurationId: 3, lastUpdate: NOW };
 
@@ -81,8 +80,8 @@ describe.each([
 
   it('the device page: quick actions, remote actions and the rename pencil, its reads kept', async () => {
     open('/devices/WH-1', user);
-    const panel = within(await screen.findByRole('tabpanel', undefined, LOAD));
-    await panel.findByText('Recent commands', undefined, LOAD);
+    const panel = within(await screen.findByRole('tabpanel'));
+    await panel.findByRole('button', { name: 'View all activity' });
     expectShown(screen.queryAllByRole('toolbar', { name: 'Quick actions' }));
     expectShown(panel.queryAllByText('Remote actions'));
     expectShown(screen.queryAllByRole('button', { name: /Rename device/ }));
@@ -91,27 +90,28 @@ describe.each([
 
   it('the Devices list: Sync, the row menu, selection and Enroll, the list kept', async () => {
     open('/devices', user);
-    await main().findByRole('link', { name: /Front desk/ }, LOAD);
-    expectShown(main().queryAllByRole('button', { name: 'Sync WH-1 now' }));
+    await main().findByRole('link', { name: /Front desk/ });
+    expectShown(main().queryAllByRole('button', { name: 'Sync now: WH-1' }));
     expectShown(main().queryAllByRole('button', { name: 'More actions for WH-1' }));
     expectShown(main().queryAllByRole('checkbox', { name: 'Select WH-1' }));
     expectShown(main().queryAllByRole('link', { name: 'Enroll device' }));
   });
 
-  it('the Overview: Enroll, and Sync now on a device out of sync (Open device instead)', async () => {
+  it('the Overview: Enroll, and Sync now on a device out of sync (its name links to it either way)', async () => {
     open('/', user);
-    // The row's action once the probe has found the device out of sync.
+    // The row's action once the probe has found the device out of sync; the device's name is the row's link.
     const sync = () => main().queryAllByRole('button', { name: 'Sync now: Front desk' });
-    const openIt = () => main().queryAllByRole('link', { name: 'Open device: Front desk' });
-    await waitFor(() => expect(sync().length + openIt().length).toBe(1), LOAD);
+    // Every role waits for the probe's answer (the row's reason), so a missing Sync now is the role's, not the probe's.
+    const attention = within(await main().findByRole('table', { name: 'Devices that need attention' }));
+    await attention.findByText(/Configuration out of sync|Configuration failed to apply/);
+    expect(attention.getAllByRole('link', { name: /Front desk/ }).length > 0).toBe(true);
     expectShown(sync());
-    expect(openIt().length > 0).toBe(!shown);
     expectShown(main().queryAllByRole('link', { name: 'Enroll device' }));
   });
 
   it('Settings: the rollout’s buttons and the Enroll link, the rollout itself kept', async () => {
     open('/settings', user);
-    await main().findByText(/Updating the agent to/, undefined, LOAD);
+    await main().findByText(/Updating the agent to/);
     expectShown(main().queryAllByRole('button', { name: 'Cancel rollout' }));
     expectShown(main().queryAllByRole('button', { name: 'Promote to everyone else' }));
     expectShown(main().queryAllByRole('link', { name: 'Enroll a device' }));
@@ -119,7 +119,7 @@ describe.each([
 
   it('Apps: Deploy, and the checksum and remove entries (edit_application_versions, edit_applications), the library kept', async () => {
     open('/apps', user);
-    await main().findByText('com.acme.scanner', undefined, LOAD);
+    await main().findByText('com.acme.scanner');
     expectShown(main().queryAllByRole('button', { name: 'Deploy Scanner' }));
     const headers = within(main().getByRole('table', { name: 'Library' })).getAllByRole('columnheader');
     expect(headers.map((h) => h.textContent)).toEqual(['App', 'Version', 'Source', 'Checksum', 'Used in', ...(shown ? ['Actions'] : [])]);
@@ -132,7 +132,7 @@ describe.each([
     if (more.length) {
       fireEvent.click(more[0]);
       const items = within(await screen.findByRole('menu')).getAllByRole('menuitem').map((m) => m.textContent);
-      expect(items).toEqual(['SHA-256 checksum…', 'Remove from library…']);
+      expect(items).toEqual(['SHA-256 checksum', 'Remove from library']);
     }
   });
 });
@@ -152,20 +152,22 @@ describe.each([
 ])('Settings → Updates as $role (deploymentAdmin: $shown)', ({ user, shown }) => {
   it('offers Check now, the update and the automatic-updates switch, the status kept', async () => {
     open('/settings', user);
-    const card = within(await screen.findByRole('region', { name: 'Updates' }, LOAD));
-    await card.findByText(/is ready/, undefined, LOAD);
+    const card = within(await screen.findByRole('region', { name: 'Updates' }));
+    await card.findByText(/is ready/);
     expect(card.getByText(/Checked/)).toBeTruthy();
     expect(card.queryAllByRole('button', { name: 'Check now' }).length > 0).toBe(shown);
     expect(card.queryAllByRole('button', { name: /Update server and console/ }).length > 0).toBe(shown);
-    expect(card.queryAllByRole('switch').length > 0).toBe(shown);
-    expect(card.getByText('Install updates automatically')).toBeTruthy();
+    // Everyone sees the switch; only the deployment admin can turn it (aria-disabled, with the reason, for the rest).
+    expect(card.getByRole('switch', { name: 'Install updates automatically' }).getAttribute('aria-disabled')).toBe(
+      shown ? null : 'true',
+    );
   });
 
   it('keeps the help that speaks of the update to the roles it offers the update to', async () => {
     // Automatic updates skip this release, as its last update rolled back: the note says Update installs it by hand.
     open('/settings', user, api, { ...UPDATE_STATUS, auto: true, autoSkipped: UPDATE_STATUS.latest });
-    const card = within(await screen.findByRole('region', { name: 'Updates' }, LOAD));
-    await card.findByText(/is ready/, undefined, LOAD);
+    const card = within(await screen.findByRole('region', { name: 'Updates' }));
+    await card.findByText(/is ready/);
     expect(card.queryAllByText(/Takes about 2 minutes/).length > 0).toBe(shown);
     expect(card.getByText(/won’t install/).textContent).toMatch(/a newer release installs on its own\.$/i);
     expect(card.queryAllByText(/installs it by hand/).length > 0).toBe(shown);
@@ -173,8 +175,8 @@ describe.each([
 
   it('says who can update where it shows no Update button', async () => {
     open('/settings', user);
-    const card = within(await screen.findByRole('region', { name: 'Updates' }, LOAD));
-    await card.findByText(/is ready/, undefined, LOAD);
+    const card = within(await screen.findByRole('region', { name: 'Updates' }));
+    await card.findByText(/is ready/);
     expect(card.queryAllByText('Only a super-admin, or the admin of a single-customer install, can update.').length > 0)
       .toBe(!shown);
   });
@@ -182,8 +184,9 @@ describe.each([
   it('the sidebar’s update card says how long it takes only to those who may update', async () => {
     open('/settings', user);
     const nav = within(screen.getByRole('navigation', { name: 'Main' }));
-    const card = await nav.findByRole('link', { name: /Server update 0\.3\.8/ }, LOAD);
-    expect(card.textContent).toMatch(shown ? /About 2 minutes\./ : /An admin who runs this install can apply it\./);
+    const card = await nav.findByRole('link', { name: /Server update 0\.3\.8/ });
+    expect(card.getAttribute('href')).toBe('/settings#updates');
+    expect(card.textContent).toMatch(shown ? /About 2 minutes to apply\./ : /An admin can apply it\./);
   });
 });
 
@@ -196,14 +199,14 @@ describe('Settings → Updates follows a deploymentAdmin refresh', () => {
   ])('%s', async (_, change) => {
     let current: AuthUser = ROLES.admin;
     open('/settings', ROLES.admin, (path, init) => (path.endsWith('/users/current') ? current : api(path, init)));
-    const card = within(await screen.findByRole('region', { name: 'Updates' }, LOAD));
-    await card.findByRole('button', { name: /Update server and console/ }, LOAD);
+    const card = within(await screen.findByRole('region', { name: 'Updates' }));
+    await card.findByRole('button', { name: /Update server and console/ });
 
     current = { ...ROLES.admin, ...change };
     act(() => void document.dispatchEvent(new Event('visibilitychange')));
     await waitFor(() => expect(card.queryByRole('button', { name: /Update server and console/ })).toBeNull());
     expect(card.queryByRole('button', { name: 'Check now' })).toBeNull();
-    expect(card.queryByRole('switch')).toBeNull();
+    expect(card.getByRole('switch').getAttribute('aria-disabled')).toBe('true');
   });
 });
 
@@ -223,14 +226,14 @@ describe('Deploy offers only the modes the role may use', () => {
     ['both', ['applications', 'edit_devices', 'edit_applications'], ['Push to devices', 'Add to a configuration']],
   ])('%s', async (_, permissions, modes) => {
     open('/apps', custom(permissions));
-    fireEvent.click(await main().findByRole('button', { name: 'Deploy Scanner' }, LOAD));
-    const dialog = within(await screen.findByRole('dialog', { name: 'Deploy Scanner' }, LOAD));
+    fireEvent.click(await main().findByRole('button', { name: 'Deploy Scanner' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Deploy Scanner' }));
     expect(dialog.getAllByRole('tab').map((t) => t.textContent)).toEqual(modes);
   });
 
   it('is not offered with neither', async () => {
     open('/apps', custom(['applications', 'configurations']));
-    await main().findByText('com.acme.scanner', undefined, LOAD);
+    await main().findByText('com.acme.scanner');
     expect(main().queryByRole('button', { name: 'Deploy Scanner' })).toBeNull();
   });
 
@@ -242,8 +245,8 @@ describe('Deploy offers only the modes the role may use', () => {
     let current = custom(['applications', 'edit_devices', 'edit_applications']);
     stubApi((path, init) => (path.endsWith('/users/current') ? current : api(path, init)));
     renderInConsole(<AppRoutes />, { path: '/apps', user: current });
-    fireEvent.click(await main().findByRole('button', { name: 'Deploy Scanner' }, LOAD));
-    const dialog = within(await screen.findByRole('dialog', { name: 'Deploy Scanner' }, LOAD));
+    fireEvent.click(await main().findByRole('button', { name: 'Deploy Scanner' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Deploy Scanner' }));
     expect(dialog.getByRole('tab', { name: 'Push to devices' }).getAttribute('aria-selected')).toBe('true');
 
     current = custom(after);
@@ -263,9 +266,11 @@ describe('Deploy offers only the modes the role may use', () => {
     open('/apps', custom(['applications', 'edit_applications']), (path, init) =>
       new URL(path, 'http://console').pathname.endsWith('/configurations/search') ? null : api(path, init),
     );
-    fireEvent.click(await main().findByRole('button', { name: 'Deploy Scanner' }, LOAD));
-    const dialog = within(await screen.findByRole('dialog', { name: 'Deploy Scanner' }, LOAD));
-    expect(await dialog.findByRole('option', { name: 'Warehouse' }, LOAD)).toBeTruthy();
+    fireEvent.click(await main().findByRole('button', { name: 'Deploy Scanner' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Deploy Scanner' }));
+    // The picker's options show once it opens (ui/Input Select).
+    fireEvent.click(await dialog.findByRole('combobox'));
+    expect(await screen.findByRole('option', { name: 'Warehouse' })).toBeTruthy();
   });
 });
 
@@ -278,21 +283,21 @@ describe.each([
 ])('Configurations as $role (add_config: $add, copy_config: $copy)', ({ user, add, copy }) => {
   const has = (found: unknown[], expected: boolean) => expect(found.length > 0).toBe(expected);
 
-  it('the list: New configuration, and each card’s Duplicate and Delete', async () => {
+  it('the list: New configuration, and each row’s Duplicate and Delete', async () => {
     open('/configurations', user);
-    await main().findByRole('link', { name: 'Warehouse' }, LOAD);
-    has(main().queryAllByRole('button', { name: 'New configuration' }), add);
-    has(main().queryAllByRole('button', { name: 'Duplicate' }), copy);
+    await main().findByRole('link', { name: 'Warehouse' });
+    // "New configuration" when there are templates to choose from (its chooser), else it creates directly.
+    has(main().queryAllByRole('button', { name: /^New configuration(…)?$/ }), add);
     fireEvent.click(main().getByRole('button', { name: 'More for Warehouse' }));
     const items = within(await screen.findByRole('menu')).getAllByRole('menuitem').map((m) => m.textContent);
-    expect(items).toEqual(copy ? ['Edit', 'Duplicate…', 'Delete…'] : ['Edit']);
+    expect(items).toEqual(copy ? ['Edit', 'Duplicate', 'Delete'] : ['Edit']);
   });
 
   it('the editor: Duplicate and Delete', async () => {
     open('/configurations/3', user);
-    await main().findByRole('heading', { name: 'Warehouse' }, LOAD);
+    await main().findByRole('heading', { name: 'Warehouse' });
     has(main().queryAllByRole('button', { name: 'Duplicate' }), copy);
-    has(main().queryAllByRole('button', { name: 'Delete…' }), copy);
+    has(main().queryAllByRole('button', { name: 'Delete' }), copy);
   });
 
   // A new configuration, blank or from a template (?from=), saves with PUT and no id, which needs add_config.
@@ -300,9 +305,9 @@ describe.each([
   it.each(['/configurations/new', '/configurations/new?from=3'])('%s: the editor, or no access', async (path) => {
     open(path, user);
     if (add) {
-      expect(await main().findByRole('button', { name: 'Create configuration' }, LOAD)).toBeTruthy();
+      expect(await main().findByRole('button', { name: 'Create configuration' })).toBeTruthy();
     } else {
-      expect(await main().findByText('You don’t have access to this page', undefined, LOAD)).toBeTruthy();
+      expect(await main().findByText('You don’t have access to this page')).toBeTruthy();
       expect(main().queryByRole('button', { name: 'Create configuration' })).toBeNull();
     }
   });
@@ -319,13 +324,13 @@ describe.each([
 
   it('F-Droid: Add to library', async () => {
     open('/apps?source=fdroid', user);
-    await main().findByText('org.example.maps', undefined, LOAD);
-    has(main().queryAllByRole('button', { name: 'Add Maps to library' }), add);
+    await main().findByText('org.example.maps');
+    has(main().queryAllByRole('button', { name: 'Add to library: Maps' }), add);
   });
 
   it('Custom APK: the upload and Add to library', async () => {
     open('/apps?source=custom', user);
-    await main().findByRole('heading', { name: 'Add your own app' }, LOAD);
+    await main().findByRole('heading', { name: 'Add your own app' });
     has(main().queryAllByRole('button', { name: 'Choose a file' }), upload);
     has(main().queryAllByRole('button', { name: 'Add to library' }), add);
   });
@@ -344,18 +349,18 @@ describe.each([
 
   it.each(['/apps', '/apps?source=custom', '/apps?source=fdroid'])('%s', async (path) => {
     open(path, user);
-    await main().findByRole('navigation', { name: 'App source' }, LOAD);
+    await main().findByRole('navigation', { name: 'App source' });
     expect(tabBar().getAllByRole('link').map((t) => t.textContent?.replace(/\d+$/, ''))).toEqual(tabs);
     const source = new URLSearchParams(path.split('?')[1]).get('source');
     const label = source === 'custom' ? 'Custom APK' : source === 'fdroid' ? 'F-Droid' : 'Library';
     const current = tabs.includes(label) ? label : 'Library';
     expect(tabBar().getByRole('link', { current: 'page' }).textContent).toMatch(new RegExp(`^${current}`));
-    if (current === 'Library') await main().findByText('com.acme.scanner', undefined, LOAD);
+    if (current === 'Library') await main().findByText('com.acme.scanner');
   });
 
   it('the empty library links only to the tabs shown', async () => {
     open('/apps', user, (path, init) => (new URL(path, 'http://console').pathname.endsWith('/applications/search') ? [] : api(path, init)));
-    await main().findByText('No apps in the library yet', undefined, LOAD);
+    await main().findByText('No apps in the library yet');
     expect(main().queryAllByRole('link', { name: 'Add your own app' }).length > 0).toBe(tabs.includes('Custom APK'));
     expect(main().queryAllByRole('link', { name: 'Browse F-Droid' }).length > 0).toBe(tabs.includes('F-Droid'));
     if (!tabs.includes('Custom APK')) expect(main().queryByText(/Upload an APK/)).toBeNull();
@@ -370,7 +375,7 @@ describe.each([
 // (canReachWholeFleet), edit_devices or not.
 it('Settings: a user limited to some device groups gets the rollout without its buttons', async () => {
   open('/settings', { ...ROLES.admin, allDevicesAvailable: false });
-  await main().findByText(/Updating the agent to/, undefined, LOAD);
+  await main().findByText(/Updating the agent to/);
   expect(main().queryByRole('button', { name: 'Cancel rollout' })).toBeNull();
   expect(main().queryByRole('button', { name: 'Promote to everyone else' })).toBeNull();
   expect(main().getByRole('link', { name: 'Enroll a device' })).toBeTruthy();
@@ -382,8 +387,26 @@ describe('renaming follows edit_device_desc alone', () => {
     ['edit_devices without edit_device_desc', ['edit_devices'], false, true],
   ])('%s', async (_, permissions, rename, actions) => {
     open('/devices/WH-1', custom(permissions));
-    await within(await screen.findByRole('tabpanel', undefined, LOAD)).findByText('Recent commands', undefined, LOAD);
+    await within(await screen.findByRole('tabpanel')).findByRole('button', { name: 'View all activity' });
     expect(screen.queryAllByRole('button', { name: /Rename device/ }).length > 0).toBe(rename);
     expect(screen.queryAllByRole('toolbar', { name: 'Quick actions' }).length > 0).toBe(actions);
+  });
+});
+
+describe('the Overview with no device enrolled', () => {
+  const empty = (path: string, init?: RequestInit): unknown =>
+    new URL(path, 'http://console').pathname.endsWith('/devices/search')
+      ? { devices: { items: [], totalItemsCount: 0 }, configurations: {} }
+      : api(path, init);
+
+  it.each([
+    { role: 'Admin', user: ROLES.admin, firstRun: true },
+    { role: 'User', user: ROLES.user, firstRun: true },
+    { role: 'Observer', user: ROLES.observer, firstRun: false },
+    { role: 'User scoped to some devices', user: { ...ROLES.user, allDevicesAvailable: false }, firstRun: false },
+  ])('$role: the first-run steps only for a role that may enroll and sees the whole fleet', async ({ user, firstRun }) => {
+    open('/', user, empty);
+    await main().findAllByText('No devices yet');
+    expect(main().queryAllByRole('heading', { name: 'Enroll your first device' }).length > 0).toBe(firstRun);
   });
 });

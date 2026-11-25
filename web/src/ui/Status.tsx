@@ -11,6 +11,7 @@ export type StatusKind =
   | 'online'
   | 'attention'
   | 'offline'
+  | 'wiped'
   // configuration sync (Devices sync column, device page outcomes)
   | 'inSync'
   | 'applying'
@@ -35,8 +36,10 @@ interface StatusMeta {
 /** Tone, shape and default wording per status. Labels follow the boards; pass `label` to override. */
 export const STATUS_META: Record<StatusKind, StatusMeta> = {
   online: { tone: 'ok', shape: 'circle', label: 'Online' },
-  attention: { tone: 'warn', shape: 'diamond', label: 'Attention' },
+  attention: { tone: 'warn', shape: 'diamond', label: 'Needs attention' },
   offline: { tone: 'idle', shape: 'ring', label: 'Offline' },
+  // Grey as offline (it no longer reports), but a filled square: an end state, not a phone that may come back.
+  wiped: { tone: 'idle', shape: 'square', label: 'Wiped' },
   inSync: { tone: 'ok', shape: 'circle', label: 'In sync' },
   applying: { tone: 'warn', shape: 'diamond', label: 'Applying…' },
   applyFailed: { tone: 'alert', shape: 'square', label: 'Apply failed' },

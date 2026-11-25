@@ -42,7 +42,8 @@ APK.
   only sends it commands it reports it supports, and the agent protocol (`/agent/v1`) only ever adds fields. A test
   in CI checks this.
 - **One command installs the server.** It runs on Docker Compose with automatic HTTPS (Caddy) or a Cloudflare Tunnel,
-  or natively on Debian 12/13 and Ubuntu 24.04.
+  or natively on Debian 12/13 and Ubuntu 24.04, on x86_64 or Arm64. The published Docker images are x86_64 only for
+  now; Arm64 images are planned.
 
 ## ■ Features
 
@@ -58,13 +59,14 @@ APK.
 - **Device page:** tabs for remote actions, telemetry (hardware, battery, storage, network), apps, activity and
   location. The Apps tab lists the device's apps that have a launcher icon, from its latest scan, with search and a
   CSV export.
-- **Configurations:** a configuration sets up to 23 device settings, from kiosk options to Wi-Fi, factory reset and
+- **Configurations:** a configuration sets up to 25 device settings, from kiosk options to Wi-Fi, factory reset and
   Safe Mode. Devices apply it at their next check-in, and the device page shows the result for each setting. Apps
   added to a configuration install on its devices at their next check-in.
 - **Kiosk mode:** locks a device to one app or to a grid of chosen apps, in the colours the configuration sets. Safe
-  Mode is blocked in kiosk unless the configuration allows it. If the kiosk app stops, the device stays in kiosk
-  and shows an "Open again" button. An exit PIN can end kiosk on the device; too many wrong PINs lock the exit for a
-  while and email the administrators.
+  Mode is blocked in kiosk unless the configuration allows it. If a one-app kiosk's app closes, the launcher opens it
+  again; if it closes more than 3 times within a minute, the device stays in kiosk and shows an "Open again" button.
+  An exit PIN can end kiosk on the device; too many wrong PINs lock the exit for a while and, when email is set up,
+  email the administrators.
 - **Apps:** add apps from your own APK uploads, from the F-Droid catalog or by a link to the APK. Every install is
   checked against the app's SHA-256: uploads and F-Droid apps have one already, and for a link you add it. The agent
   installs apps without asking the device's user.
@@ -84,25 +86,29 @@ APK.
 
 ## ■ Quick start
 
-On a Linux host with Docker, Docker Compose v2, `openssl` and `curl`, and either a domain in Cloudflare (for a
-Cloudflare Tunnel) or a domain pointed at the host with ports 80 and 443 open:
+On an x86_64 Linux host with Docker, Docker Compose v2, `curl`, `openssl` 3.0+ (or an older `openssl` and
+`minisign`), and either a domain in Cloudflare (for a Cloudflare Tunnel) or a domain pointed at the host with ports 80
+and 443 open:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/MDMesh-app/MDMesh/main/quickstart.sh)
+bash <(curl -fsSL https://github.com/MDMesh-app/MDMesh/releases/latest/download/quickstart.sh)
 ```
 
-This pulls the released images and sets up updates from the console. To build the images from source instead
-(`setup.sh` also needs `openssl`, and, if they are there, uses `python3` and `curl` to verify the latest release for
-the enrollment QR):
+To check `quickstart.sh` against the signed release before it runs, use the
+[checked install](DEPLOY.md#option-a--quick-start-no-clone-published-images) in DEPLOY.md instead.
+
+The quick start pulls the released images and sets up updates from the console. To build the images from source instead
+(`./setup.sh --update` needs `git`, `curl`, and `openssl` 3.0+, or an older `openssl` and `minisign`; `python3` is
+optional, to verify the release for the enrollment QR):
 
 ```bash
 git clone https://github.com/MDMesh-app/MDMesh.git && cd MDMesh
-./setup.sh
+./setup.sh --update      # checks out the newest signed release, then sets it up
 ```
 
-Without Docker, run `sudo ./setup.sh --native` from the clone on Debian 12/13 or Ubuntu 24.04. It only needs `git`
-and brings the rest ([native install](DEPLOY.md#option-c--native-no-docker)). Each installer prints the console URL
-and a temporary admin password. Then enroll a device:
+Without Docker, run `sudo ./setup.sh --update --native` from the clone on Debian 12/13 or Ubuntu 24.04 (x86_64 or
+Arm64). It only needs `git` and brings the rest ([native install](DEPLOY.md#option-c--native-no-docker)). Each
+installer prints the console URL and a temporary admin password. Then enroll a device:
 
 1. Sign in and set your own password.
 2. Open **Enroll** and choose a configuration. The page shows its QR code.
@@ -169,4 +175,4 @@ MDMesh is licensed under the **[Apache License 2.0](LICENSE)**. It is a fork of 
 by Headwind Solutions LLC, also Apache-2.0 ([why and how: ADR-0008](docs/adr/0008-licensing-and-rebrand.md)).
 Trademarks and brand names belong to their owners.
 
-<div align="center"><sub><a href="DEPLOY.md">Install</a> · <a href="docs/UPGRADING.md">Upgrading</a> · <a href="docs/OPERATIONS.md">Operations</a> · <a href="STRUCTURE.md">Structure</a> · <a href="docs/DEV.md">Development</a> · <a href="docs/agent-architecture.md">Agent internals</a> · <a href="RELEASING.md">Releasing</a></sub></div>
+<div align="center"><sub><a href="DEPLOY.md">Install</a> · <a href="docs/UPGRADING.md">Upgrading</a> · <a href="docs/OPERATIONS.md">Operations</a> · <a href="docs/USER_MANAGEMENT.md">Users and roles</a> · <a href="docs/CONFIGURATIONS.md">Configurations</a> · <a href="docs/KIOSK.md">Kiosk mode</a> · <a href="STRUCTURE.md">Structure</a> · <a href="docs/DEV.md">Development</a> · <a href="docs/agent-architecture.md">Agent internals</a> · <a href="RELEASING.md">Releasing</a></sub></div>

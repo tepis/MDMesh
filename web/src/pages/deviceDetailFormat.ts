@@ -153,7 +153,7 @@ export function fmtAge(ms: number, now: number): string {
   return formatRelative(ms, now, 'short').replace(/ ago$/, '');
 }
 
-/** Recent-commands time: "3m ago", "2h ago" within a day, then "Yesterday", "3 days ago", the date. */
+/** A command's time: "3m ago", "2h ago" within a day, then "Yesterday", "3 days ago", the date. */
 export function fmtWhen(ms: number, now: number): string {
   return now - ms < 24 * 3600 * 1000 ? formatRelative(ms, now, 'short') : formatRelative(ms, now, 'long');
 }
@@ -174,10 +174,10 @@ export function makeModel(manufacturer?: string, model?: string): string | undef
    Configuration status
    --------------------------------------------------------------------------------------------------------------- */
 
-/** Short revision for display ("8b04d7aa"), "Reset by device" for the agent's self-heal marker. */
+/** Short revision for display, 7 characters as git shows them ("8b04d7a"); "Out of date" for the agent's stale marker. */
 export function shortRevision(r?: string | null): string {
-  if (r === DEVICE_RESET_REVISION) return 'Reset by device';
-  return r ? r.slice(0, 8) : DASH;
+  if (r === DEVICE_RESET_REVISION) return 'Out of date';
+  return r ? r.slice(0, 7) : DASH;
 }
 
 /** Whether the configuration panel shows in full (anything but a clean "In sync"). */
@@ -209,9 +209,21 @@ export function commandStatus(status: string): { kind: StatusKind; label?: strin
   }
 }
 
+/**
+ * Device events the agent reports as something to look at (#220's storage recovery, a failed boot re-apply, a factory
+ * reset that didn't start, #222).
+ */
+export const WARN_EVENTS: ReadonlySet<string> = new Set([
+  'lowBattery',
+  'kioskCrashLoop',
+  'storageRecovered',
+  'configReapplyFailed',
+  'wipeNotStarted',
+]);
+
 export function eventTone(type: string): StatusTone {
   if (type === 'kioskPinLockout') return 'alert';
-  if (type === 'lowBattery' || type === 'kioskCrashLoop') return 'warn';
+  if (WARN_EVENTS.has(type)) return 'warn';
   if (type === 'enrolled' || type === 'appInstalled') return 'ok';
   return 'idle';
 }

@@ -5,8 +5,8 @@
 | Install | Update with | One-click rollback |
 |---------|-------------|--------------------|
 | Quick start (Option A) | **Update** in the console, or automatic updates | Yes, from `/recovery` |
-| From source (Option B) | `git pull && ./setup.sh` | Only with a registry `IMAGE_OWNER` ([below](#from-source-docker-installs)) |
-| Native (Option C) | `git pull && sudo ./setup.sh --native` | No |
+| From source (Option B) | `./setup.sh --update` (from 0.4.x, first [move to 0.5.0 once](#v050)) | Only with a registry `IMAGE_OWNER` ([below](#from-source-docker-installs)) |
+| Native (Option C) | `sudo ./setup.sh --update --native` (from 0.4.x, first [move to 0.5.0 once](#v050)) | No |
 
 Before you update, read the [version notes](#version-notes) for each release you are moving past.
 
@@ -17,29 +17,58 @@ applies them: it backs up the database, then rolls back if the new version fails
 ([settings](OPERATIONS.md#updater-supervisor)). If no update shows up, see the `[verify]` line in
 `docker compose logs supervisor` (native: `journalctl -u mdmesh-supervisor`).
 
+If the update on offer skips over a release that fixed security issues (say this server runs 0.5.0, 0.5.1 fixed one,
+and 0.5.2 is on offer), the console says so in amber: the sidebar and Overview cards say the update "includes security
+fixes from 0.5.1 that this server is missing", the Settings list marks Updates "Security fixes", and Settings →
+Updates names the releases and links their notes. The list is the signed manifest's `securityReleases` (every release
+whose changelog has a Security section), read only from a manifest that verified; the supervisor reports the skipped
+ones as `missedSecurity` in `/update/status`. Installing the offered release brings those fixes. It needs a 0.5.0 or
+later supervisor and releases from 0.5.0 on, so a 0.4.x server sees no warning on its way to 0.5.0.
+
 ## Quick-start installs
 
-The install's admin (a super-admin, or the org admin of a single-customer install) clicks **Update** on the console's
-banner. A failed update rolls back by itself.
+The install's admin (a super-admin, or the org admin of a single-customer install) selects **Review update** on the
+console's server-update card, then **Update server and console**. A failed update rolls back by itself.
 
 **Automatic updates** (Settings, or `AUTO_UPDATE=1`) apply each release without a prompt. Once `/backups/auto.json`
 exists (the Settings switch, or any failed or rolled-back update, creates it), it wins over `AUTO_UPDATE`; change it
 in Settings. A release that failed, or that you rolled back
 from, is never applied automatically again (`autoSkipped` in `/update/status`). **Update** still applies it by hand.
 
-Updates never touch the supervisor. To pick up its fixes:
+An update runs exactly the images its signed manifest names: from 0.5.0 the supervisor pins `SERVER_VERSION` and
+`WEB_VERSION` in `.env` to their digests (`0.5.0@sha256:…`). A release whose manifest pins no digests, or pins them
+under another owner than `IMAGE_OWNER` (a fork's install following upstream releases), is refused with that reason,
+and nothing changes.
+
+Updates never recreate the supervisor itself. To pick up its fixes after an update:
 
 ```bash
 docker compose pull && docker compose up -d
 ```
 
-This works because `SUPERVISOR_VERSION=latest`. If you pinned it, bump it by hand.
+When `SUPERVISOR_VERSION` is `latest` (quick starts before 0.5.0) this brings the newest supervisor. Once a 0.5.0 or
+newer supervisor applies an update, it pins `SUPERVISOR_VERSION` to that release's supervisor by digest, and
+`docker compose up -d` starts exactly that one. A plain version you set by hand is left alone: bump it yourself.
+
+The supervisor you run decides whether updates are pinned, and how a rollback restores the database: one from before
+0.5.0 applies the 0.5.0 update by tag and can't roll it back. So on 0.4.x, get the 0.5.0 supervisor *before* you
+update ([v0.5.0](#v050)); every update from then on is pinned. If you set `SUPERVISOR_VERSION` yourself, see
+[v0.5.0](#v050).
 
 ## From-source Docker installs
 
 ```bash
-git pull && ./setup.sh
+./setup.sh --update
 ```
+
+`--update` moves the clone to the newest signed release tag and runs its setup.sh (see
+[DEPLOY](../DEPLOY.md#option-b--from-source-clone--build)). It needs `git`, `curl` and `openssl` 3.0+ (or an older
+`openssl` and `minisign`), and says which are missing before it does anything (Debian/Ubuntu:
+`sudo apt-get install git curl openssl`); as root with `--native` it installs them itself. It comes with 0.5.0: a clone from 0.4.x moves to it once
+with `git fetch --tags && git checkout v0.5.0 && ./setup.sh --update` ([v0.5.0](#v050)). A clone that is on `main` and
+already has `--update` can be ahead of the newest release: over an install, `--update` then stops rather than run
+older code. Wait for the next release and run it then, or pass `--allow-downgrade` to go to the release now. A clone
+still on a release branch (`release/vX.Y.Z`, squash-merged into the release) is not ahead: `--update` moves it on.
 
 setup.sh takes no backup, so dump the database first ([command](OPERATIONS.md#backups-and-restore)). Don't use
 `docker compose up -d --build` alone: only setup.sh updates `CURRENT_VERSION` and the image tags from the
@@ -49,7 +78,7 @@ With a registry `IMAGE_OWNER`, one-click Update and rollback work as on the quic
 build in two cases:
 
 - **Older checkout.** The checkout is older than the running `CURRENT_VERSION`, for example
-  `running 0.4.0, checkout is 0.3.1 — git pull first, or re-run with --allow-downgrade`. Run `git pull`.
+  `running 0.4.0, checkout is 0.3.1 — run ./setup.sh --update, or re-run with --allow-downgrade`. Run `./setup.sh --update`.
   `--allow-downgrade` runs the older code on purpose, against the current database, which is not rolled back.
 - **No version.** setup.sh can't read a release tag (a source tarball, or tags not fetched). Build from a tagged
   checkout, or pass `--allow-downgrade`. setup.sh then keeps the versions in `.env`; on a fresh install that is
@@ -58,18 +87,25 @@ build in two cases:
 ## Native installs
 
 ```bash
-git pull && sudo ./setup.sh --native
+sudo ./setup.sh --update --native
 ```
 
-Choose **Keep** (the default) or **Erase** (type `ERASE`). Keep runs migrations and leaves all data and the
-enrollment secret alone, after a `pg_dump` to `/opt/mdmesh/backups/` ([restore](OPERATIONS.md#backups-and-restore)).
+From 0.4.x, move the clone to 0.5.0 once with `git fetch --tags && git checkout v0.5.0 && sudo ./setup.sh --update --native` ([v0.5.0](#v050)): 0.4.x has no `--update`.
+
+Over an install, `--update` asks nothing. It shows `MDMesh · native update, <from> → <to>` and keeps the data, the
+base URL and the port, as `-y` does. From 0.5.0 it still asks once, because 0.5.0's `--update` doesn't tell the
+installer it is an update: add `-y` to skip the questions.
+
+Run without `--update` (`sudo ./setup.sh --native`), the installer asks you to type `yes`, then for the base URL and
+the port, then to choose **Keep** (the default) or **Erase** (type `ERASE`). Keep runs migrations and leaves all data
+and the enrollment secret alone, after a `pg_dump` to `/opt/mdmesh/backups/` ([restore](OPERATIONS.md#backups-and-restore)).
 
 - **Base URL:** kept from the last run (`base.url` in `ROOT.xml`). An interactive run offers it as the default, and
-  `-y` uses it. Set `BASE_URL` to change it.
-- **Unattended (`-y`):** never erases unless you set `REPLACE_DATA=yes`. It keeps the current port unless you set
+  `--update` and `-y` use it. Set `BASE_URL` to change it.
+- **Unattended (`--update`, `-y`):** never erases unless you set `REPLACE_DATA=yes`. It keeps the current port unless you set
   `HTTP_PORT`.
 - **Interrupted run:** run the same command again. It picks up where the last run stopped.
-- **Settings:** SMTP, `LEGACY_DEVICE_API`, `GITHUB_REPO` and `GITHUB_TOKEN` carry over from earlier runs, Erase
+- **Settings:** SMTP, `LEGACY_DEVICE_API`, `PROXY_ADDRESSES`, `GITHUB_REPO` and `GITHUB_TOKEN` carry over from earlier runs, Erase
   included. Pass one to change it; `GITHUB_TOKEN=` removes the token ([how](OPERATIONS.md#updater-supervisor)). On the
   first upgrade from v0.3.1 or older they are still kept, but that run's agent APK download can't read the old
   settings file in time: pass `GITHUB_TOKEN` and `GITHUB_REPO` once more if that download needs them.
@@ -116,22 +152,31 @@ STAMP=$(docker compose exec -T supervisor cat /backups/latest)
 docker compose exec -T supervisor cat "/backups/$STAMP.env"   # the pre-update versions
 docker compose stop server
 docker compose exec -T supervisor cat "/backups/$STAMP.sql" \
-  | sed "1,/^SET lock_timeout = 0;\$/s/^SET lock_timeout = 0;\$/SET lock_timeout = '60s';/" \
-  | docker compose exec -T postgres psql -X -v ON_ERROR_STOP=1 --single-transaction -U mdmesh -d mdmesh \
-      -c "SET lock_timeout = '60s'" \
+  | awk -v q="'" '!set && $0 == "SET lock_timeout = 0;" { $0 = "SET lock_timeout = " q "60s" q ";"; set = 1 }
+      $0 == "-- PostgreSQL database dump complete" { complete = 1 }
+      { print }
+      END { if (complete) print "COMMIT;\n\\echo Restored."
+            else print "DO $$ BEGIN RAISE EXCEPTION " q "the backup is incomplete" q "; END $$;" }' \
+  | docker compose exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -o /dev/null -U mdmesh -d mdmesh \
+      -c BEGIN -c "SET lock_timeout = '60s'" \
       -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()" \
+      -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO PUBLIC" \
       -f -
 ```
 
 Then:
 
 ```bash
-# only if that succeeded: copy SERVER_VERSION, WEB_VERSION and CURRENT_VERSION from the .env snapshot above into .env
+# only if it printed Restored.: copy SERVER_VERSION, WEB_VERSION and CURRENT_VERSION from the .env snapshot above into .env
 docker compose up -d --no-deps server caddy
 ```
 
-The restore ends other sessions and gives up after 60 seconds without a lock. Keep the `sed`: without it, the dump's
-own `SET lock_timeout = 0;` removes that limit.
+The restore ends other sessions, empties the database and loads the dump, all in one transaction, and prints
+`Restored.` when it committed. Anything else (an error, or no `Restored.`) means nothing changed: the database is as it
+was. It gives up after 60 seconds without a lock. Keep the `awk`: it sends the `COMMIT` only after a backup that ends
+like a complete `pg_dump` (one cut short fails with "the backup is incomplete"), and it rewrites the dump's own
+`SET lock_timeout = 0;`, which would remove that limit. Keep the `DROP SCHEMA` line too: the dump's own DROPs only know
+the tables from before the update, and one the update added that refers to them makes the restore fail.
 
 ## Agent compatibility
 
@@ -142,7 +187,248 @@ available).
 Agent 0.4.0 speaks protocol 1.5: it applies a configuration's connectivity mode, which older agents ignore. It also
 works with a 0.3.9 server.
 
+Agent 0.5.0 speaks protocol 1.11: it applies a configuration's Location services setting (1.6) and app permissions
+(1.7), resumes an enrollment whose answer was lost (1.9: it sends an enroll attempt id, and gets back the device
+it already created instead of a used-up code), draws a kiosk background image with its fit and focal point (1.10),
+and takes **Clear PIN lockout** (1.11). Older agents report Location services unsupported, can't apply app
+permissions (their devices show as out of sync while a configuration has a rule), ignore the background image, and
+don't get Clear PIN lockout (the console disables it for a device on an older agent, and the server holds it from
+older agents). It also works with a 0.4.0 server, which sends none of these and ignores the attempt id: an
+enrollment there works as before, it just can't be resumed.
+
+Downgrading the agent below 0.5.1 and upgrading again can bring back agent state removed meanwhile, such as a kiosk
+exited or credentials cleared while the older agent ran.
+
 ## Version notes
+
+### v0.5.1
+
+- **Account changes take your own password.** Scripts and API clients that create or delete users or customers,
+  change another account's password or email, change a customer's email (`PUT /rest/private/customers`), or call
+  `PUT /rest/private/users/superadmin/password` must now send `oldPassword`: the MD5 (hex) of the caller's own
+  password, as the console does. `DELETE /rest/private/users/other/{id}`
+  and `DELETE /rest/private/customers/{id}` now take a JSON body, `{"oldPassword": "..."}`. A wrong one counts as a
+  failed sign-in for the caller's account, toward the lockout ([Sign-in limits](OPERATIONS.md#sign-in-limits)), so stop
+  at the first `error.password.wrong`. A session signed in as another account can't make these changes at all.
+- **Admins limited to some device groups or configurations** can't give anyone access beyond their own, and can't
+  change, delete or sign in as an account that reaches more than they do.
+- **New accounts start with no access** in the console: choose their device groups and configurations.
+- **Everyone signs in to the console again once** after the update: sessions opened by an older release (which native
+  installs keep across a restart) end at their first request. Scripts and API clients using a JWT are not affected.
+- **A session signed in as another account** ends as soon as the admin who opened it could no longer open it: their
+  account is deleted, demoted or its password changed, or the account they signed in as now reaches more than they do.
+  From such a session, you can't sign in as yet another account. The audit log records the admin for what is done in
+  it (`impersonatedBy`, in the database and the audit API).
+- **Audit records hold no secrets.** A configuration or device change records only the fields that hold none, and
+  names the rest (`"wifiPassword": "<set>"`, `"applicationSettings": "<3 items>"`). Every other record has its
+  passwords, tokens, PINs and signed-URL parameters masked, and a body that isn't valid JSON, or is over 1 MB, is not
+  recorded.
+- **Old audit records are scrubbed in the background** the same way, starting 30 seconds after the server starts: the
+  server answers (and the update's health check passes) while it runs, and after a restart it goes on where it
+  stopped. On a test machine, 1 million records took about 2 minutes of work, so about 4 minutes in the background (it
+  works 3 seconds in every 5). The server logs "Audit records from before this release scrubbed" when it is done.
+  - Each record keeps its method, URI and User-Agent. Its body is stored again as a new record's would be: masked, or,
+    for a configuration or device change, only the fields that hold no secret. A body that isn't JSON, or is over 1 MB,
+    and the body of a request whose record no longer keeps one, is replaced with a note.
+  - Most old records are rewritten, so allow free disk space of about the size of `plugin_audit_log` until autovacuum
+    reclaims the old row versions (`VACUUM plugin_audit_log` does it at once).
+  - With several servers on one database, stop all of them before the update, then start them on 0.5.1: a server
+    still on the old release keeps writing unmasked records.
+  - If you go back to 0.5.0 without restoring its backup (`--allow-downgrade`, or a native install's WAR swapped back),
+    0.5.0 writes unmasked records again, and the scrub, once done, doesn't look at them. With the server stopped
+    (`docker compose stop server`, native: `systemctl stop mdmesh-server`), whether still 0.5.0 or already 0.5.1,
+    run this, then start 0.5.1, so the scrub takes them in:
+
+    ```bash
+    # Docker, in the install directory
+    docker compose exec -T postgres psql -U mdmesh -d mdmesh -c "UPDATE plugin_audit_scrub SET upToId = (SELECT COALESCE(MAX(id), 0) FROM plugin_audit_log) WHERE id = 1;"
+    # Native
+    sudo -u postgres psql -d mdmesh -c "UPDATE plugin_audit_scrub SET upToId = (SELECT COALESCE(MAX(id), 0) FROM plugin_audit_log) WHERE id = 1;"
+    ```
+
+    If you changed `DB_USER` or `DB_NAME`, use your values in place of `mdmesh`.
+- **Copies made before the update still hold those secrets:** the pre-update database dump the update took
+  (`/backups/<time>.sql` in the `backups` volume on Docker, `/opt/mdmesh/backups/` on native installs), older backups,
+  and the server logs (`docker compose logs server`, `journalctl -u mdmesh-server`). Change the provisioning Wi-Fi
+  password and any secrets kept in managed app settings, then delete the old dumps once you no longer need them for a
+  rollback, and prune the old logs. The access logs of Tomcat and of a reverse proxy also record the enrollment QR's
+  key, which is part of its URL (`/rest/public/qr/<key>`) and fetches the QR with the Wi-Fi password in it: prune
+  those too.
+- **With `LEGACY_DEVICE_API=1`, keep Headwind launcher devices and MDMesh agent devices in separate
+  configurations.** The launcher's routes no longer serve a configuration that an agent device uses, or that an
+  agent enrollment code can still enroll devices into, nor create launcher devices in it: the launcher gets the error
+  `error.configuration.agent.managed`, and the server log says which configuration. A code enrolls into the
+  configuration it names or, if it names none, into the default configuration for new devices (**Settings**), which
+  then counts too. A configuration named by its QR code key counts the same way, and the server no longer makes its
+  Headwind QR code. The routes answer requests for an agent device with the launcher's device-not-found error. To fix
+  a launcher device that gets the error, move it to a configuration no agent device or enrollment code uses. With
+  `LEGACY_DEVICE_API` off (the default), nothing changes.
+- With `LEGACY_DEVICE_API=1`, the launcher's sync now works for a configuration without a kiosk exit PIN. Before, it
+  failed with a server error.
+- **CVE-2026-114938 (OpenJDK).** The Base64 code of JDK 17.0.6 to 17.0.21 is affected on x86_64 CPUs with AVX-512.
+  0.5.1 runs the server with `-XX:-UseBASE64Intrinsics`, which turns that code off. To protect a server before you
+  update:
+  - **Docker (quick start and from source):** add `SERVER_JAVA_OPTS=-XX:-UseBASE64Intrinsics` to `.env` (if the line
+    is already there, add the flag to its value, quoted), then run `docker compose up -d server` to recreate the
+    container. A quick-start install made before v0.3.2 also needs the `JAVA_OPTS` line in its compose file
+    ([OPERATIONS](OPERATIONS.md#temporary-debug-log)).
+  - **Native:** `sudo ./setup.sh --update --native`. It sets the flag, and upgrades a JDK 17 from your distribution's
+    packages when apt has a newer one. Until you can update, add the flag in a drop-in, then restart. If you already
+    set `JAVA_OPTS` there, add the flag to that line, and quote the whole setting when it holds several flags
+    (unquoted, systemd keeps only the first):
+
+    ```bash
+    sudo systemctl edit mdmesh-server
+    # in the editor, under [Service]:
+    #   Environment="JAVA_OPTS=-XX:-UseBASE64Intrinsics"
+    # or, with flags you already had:
+    #   Environment="JAVA_OPTS=-Xmx1g -XX:-UseBASE64Intrinsics"
+    sudo systemctl restart mdmesh-server
+    ```
+
+  On Docker, going back to a release before 0.5.1 (`--allow-downgrade`, or a rollback) drops the flag again, so keep
+  the `.env` line if you might.
+
+  To check a running server, look for `= false` and `{command line}`:
+
+  ```bash
+  # Docker, in the install directory (before v0.2.7 the server ran as root: leave out -u mdmesh)
+  docker compose exec -u mdmesh server jcmd org.apache.catalina.startup.Bootstrap VM.flags -all | grep UseBASE64Intrinsics
+  # Native, as root (or with sudo -u mdmesh in place of runuser -u mdmesh --)
+  runuser -u mdmesh -- "$(systemctl show -p Environment --value mdmesh-server | tr ' ' '\n' | sed -n 's/^JAVA_HOME=//p')/bin/jcmd" \
+    org.apache.catalina.startup.Bootstrap VM.flags -all | grep UseBASE64Intrinsics
+  ```
+
+### v0.5.0
+
+- **Quick start: update the supervisor before you apply 0.5.0.** In the install directory, run
+
+  ```bash
+  docker compose pull supervisor && docker compose up -d supervisor
+  ```
+
+  when no update or rollback is running (Settings → Updates, or `/recovery`), then apply 0.5.0 from **Settings →
+  Updates** (**Update server and console**). The quick start set `SUPERVISOR_VERSION=latest`, so this starts the 0.5.0 supervisor (if you set a version in `.env` yourself, change it
+  to `0.5.0` first). It works with your 0.4.x server and console as before, and it is the one that then applies 0.5.0,
+  pinned by digest, and rolls it back if needed: by itself if 0.5.0 fails its health check, or from **Roll back** on
+  `/recovery`. A supervisor from before 0.5.0 can't roll 0.5.0 back (see *Going back to 0.4.0, if an old supervisor
+  applied 0.5.0* below). With automatic updates on, run the command as soon as you can: until then the old supervisor
+  may apply 0.5.0 itself.
+- **From source with a registry `IMAGE_OWNER`: don't apply 0.5.0 from the console.** Your supervisor is tied to
+  your checkout, so the command above keeps the old one. Move the clone to 0.5.0 instead (below), which updates the
+  supervisor and the server together. Turn automatic updates off until you have.
+- **The database update is automatic.** On start, the server adds `devices.wipedAt` and
+  `devices.agentEnrollAttemptHash`; `configurations.camera`, `configurations.locationServices` and the kiosk background
+  image columns (`backgroundImageFileId`, `backgroundImageSha256`, `backgroundImageFit`, `backgroundImageFocalX`,
+  `backgroundImageFocalY`); `device_state.kioskGeneration` and `device_state.kioskReturnGeneration`;
+  `applicationVersions.requestedPermissions`; `maxUses`, `useCount` and `revokedAt` on enrollment tokens; the
+  `configurationAppPermissions` and `agentEnrollmentKey` tables; and three indexes (on
+  `devices.agentEnrollAttemptHash`, on each customer's devices by enrollment time, and on
+  `configurations.backgroundImageFileId`). It also widens `users.password` to 100 characters, for bcrypt. Every new
+  column is empty for existing configurations, so no device re-applies its configuration until its agent is updated.
+  Devices wiped before the update aren't marked Wiped.
+- **PostgreSQL older than 11: existing enrollment codes stop working.** The update hashes existing codes with a
+  function PostgreSQL 11 added; on an older server it marks them used instead. Make a new code on the Enroll page.
+- **Native on PostgreSQL older than 15: there is no way back to 0.4.0.** Native has no one-click rollback, and the
+  [restore by hand](OPERATIONS.md#backups-and-restore) needs PostgreSQL 15 or newer. If you may need to go back, move
+  to PostgreSQL 15 or newer before you update.
+- **From source and native: move the clone to 0.5.0 once.** 0.4.x has no `./setup.sh --update`. Run
+  `git fetch --tags && git checkout v0.5.0 && ./setup.sh --update` (native:
+  `git fetch --tags && git checkout v0.5.0 && sudo ./setup.sh --update --native`). It works on a clone of `main` and on one checked
+  out at a release tag (where `git pull` fails). The checkout leaves the clone on the v0.5.0 tag, which is where
+  `--update` starts; `--update` then checks the release's signature and runs its setup.sh (or moves on to a newer
+  release, if there is one). Git refuses the checkout if it would overwrite local changes, and `--update` stops on any
+  it would carry along. Then use `./setup.sh --update` (native: `sudo ./setup.sh --update --native`) for every later
+  release. Don't run `--update` on a 0.4.x checkout: 0.4.x's setup.sh refuses it as an unknown option, and with
+  `--native` it ignores it and installs 0.4.x again.
+- **Update the supervisor once, or updates stay unpinned.** Updates now run the images the signed release names, by
+  digest ([how](#quick-start-installs)). The supervisor you run does that, and server updates never replace it, so one
+  from before 0.5.0 applies 0.5.0 by tag and goes on applying every later release by tag, without a message.
+  - **Quick start:** the command in the first point, before the update. If an old supervisor already applied 0.5.0
+    and you keep 0.5.0, run `docker compose pull && docker compose up -d` in the install directory instead.
+  - **From source with a registry `IMAGE_OWNER`:** the move to 0.5.0 above, even if you already applied 0.5.0 from
+    the console. setup.sh builds the supervisor and ties `SUPERVISOR_VERSION` to the checkout's release, so
+    `docker compose pull` alone keeps the old one.
+  - **Nothing to do:** a new 0.5.0 quick start is pinned from the start, and from-source installs with
+    `IMAGE_OWNER=local` and native installs don't update from release images.
+- **New agent: 0.5.0.** Once the supervisor has downloaded it, **Settings → Agent rollout** offers it: pick a few
+  canary devices, then promote it to everyone else. Most of this release's device features need it (see
+  [Agent compatibility](#agent-compatibility)); devices on older agents keep working. A device that takes it applies
+  its configuration once more, as after every agent update.
+- **Live connection can take up to 5 minutes to come back after an outage (agent 0.5.0).** When the server has been
+  unreachable for a while, a device's live connection can take up to 5 minutes to come back (it was up to 1 minute), so
+  Sync now may say the device isn't connected a little longer. The connection comes back at once when the device's
+  network returns or its next check-in gets through. Check-ins are not affected.
+- **Native installer and answers.** The installer stops on a command-line option it doesn't take, instead of
+  ignoring it. `REPLACE_DATA` must be `yes` or `no`, and `ASSUME_YES` `1` or `0`; empty means not set (the default).
+  Any other value stops it before it changes anything; before 0.5.0, another `REPLACE_DATA` meant Keep and another
+  `ASSUME_YES` meant ask. An answers file (`MDMESH_ANSWERS`, new in 0.5.0) must be owned by you or root and give no
+  access to group or others (for example `chmod 600`). Check scripts that run the installer unattended.
+- **Forks.** Once a 0.5.0 supervisor runs, it refuses a release whose manifest has no digests, and one that pins them
+  under another owner than `IMAGE_OWNER`, with that reason, and nothing changes. A fork that publishes its own releases
+  must use the current release workflow ([RELEASING.md](../RELEASING.md)). An install that follows upstream releases
+  with its own `IMAGE_OWNER` must set `GITHUB_REPO` to the repository that publishes its images, or `IMAGE_OWNER` to
+  `mdmesh-app`.
+- **Going back to 0.4.0, if an old supervisor applied 0.5.0.** A supervisor from before 0.5.0 can't roll 0.5.0
+  back: its restore stops at `cannot drop constraint configurations_pr_key ... because other objects depend on it` (0.5.0 adds a
+  table that refers to configurations). Nothing changes: the database stays as it was, and `server` is left stopped.
+  The 0.5.0 supervisor restores into an emptied schema instead. So, on a quick start, run
+  `docker compose pull supervisor && docker compose up -d supervisor`, then **Roll back** from `/recovery`. If a
+  rollback, from **Roll back** or after a failed update, already stopped there, the same command and **Roll back**
+  again finish it with the same backup. To stay on 0.5.0 instead, run `docker compose up -d server`. By hand:
+  [Restoring by hand](#restoring-by-hand).
+- **Going back to 0.4.0: enrollment codes.** The update stores enrollment codes hashed, the existing ones included
+  (on PostgreSQL older than 11 it marks them used instead, see above). A one-click rollback, and the restores in
+  [Backups and restore](OPERATIONS.md#backups-and-restore), bring back the database from before the update, with its
+  codes as they were. A 0.4.0 server started on the 0.5.0 database instead, without a restore (`--allow-downgrade`,
+  say), finds none of them: every code made before the downgrade is refused as unknown, including one already printed
+  or in a QR. Make a new code on the Enroll page. If you then update that same database to 0.5.0 again, codes made
+  while 0.4.0 ran don't work either: make new ones.
+- **Going back to 0.4.0: passwords.** 0.5.0 stores passwords as bcrypt; an existing password is converted at its
+  user's next sign-in, and 0.4.0 can't check a converted one. A one-click rollback, and the restores in
+  [Backups and restore](OPERATIONS.md#backups-and-restore), bring back the database from before the update, with every
+  password as it was then (one changed after the update is back to the old one). A 0.4.0 server started on the 0.5.0
+  database instead, without a restore, refuses every user who signed in or changed their password on 0.5.0, the admin
+  who applied the update included. Restore the backup. If you can't, set a password 0.4.0 can check for each of those
+  users, then sign in and change it (the 0.4.0 console has no page for setting another user's password). From the
+  clone, `. install/lib/db.sh; mdm_pwhash 'NEW-PASSWORD'` prints the hash; then run
+  `UPDATE users SET password = '<the hash>' WHERE login = '<login>';` in psql
+  (`docker compose exec -T postgres psql -U mdmesh -d mdmesh`, native: `sudo -u postgres psql -d mdmesh`).
+- **App permissions (agent 0.5.0):** a configuration can Grant or Deny an installed app's runtime permissions. Devices
+  on an older agent, or not Device Owner, can't apply them: they get the rest of the configuration and show as out of
+  sync while it has a rule, until their agent is updated. Configurations without rules stay in sync on every agent.
+  API clients: `PUT /rest/private/configurations` takes `managedAppPermissions` (`[{applicationId, permission, state}]`,
+  state `grant` or `deny`); leaving it out keeps the stored rules, and rules for apps the save doesn't install are
+  dropped.
+- **API changes.** `POST /rest/private/agent/v1/token` takes `maxUses` and `validHours` (left out: one device, 24 hours,
+  as before); `POST /rest/private/agent/v1/token/revoke-all` stops every code;
+  `GET /rest/private/agent/v1/devices/enrolled?since=<ms>` lists the devices enrolled since then. Enrollment codes are
+  stored hashed, so the database no longer holds them in clear. `PUT /rest/private/roles` and
+  `DELETE /rest/private/roles/{id}` now refuse the super-admin and org-admin roles (`error.role.protected`).
+- **Return to kiosk on the device (agent 0.5.0):** after someone leaves a kiosk with the exit PIN, the MDMesh app
+  offers **Return to kiosk**, offline too, while the device's configuration enables kiosk. A console **Exit kiosk**
+  (`kiosk.exit`) leaves that option on the device; to remove it, turn kiosk off in the configuration. Older agents
+  don't show it.
+- **The agent is called MDMesh on devices (agent 0.5.0):** it was MDM Agent, and its icon is a white square on dark
+  (was a white shield on blue). It's the same app, so it updates in place and keeps Device Owner. Update staff
+  instructions that name it or show its icon.
+- **Kiosk exit PINs are 6 to 12 digits:** the console and the API (`PUT /rest/private/configurations`) refuse a new or
+  changed PIN that isn't, with HTTP 400. A `kiosk.enter` command whose `password` isn't is refused too (an ERROR).
+  Return to configured kiosk sends no PIN: its payload has `"configuredPin": true`, and the server puts in each
+  device's own configuration PIN as stored (refused, or skipped in bulk, for a device without a configuration), so it
+  keeps working on configurations with an older PIN, and agents of any version get an ordinary `kiosk.enter`. A PIN saved before keeps working on devices and keeps its configuration
+  saveable while it stays as it is; the console marks it **Old PIN** and `legacyKioskPin` is true in the API. Set new
+  PINs before staff need them: a device on agent 0.5.0 shows a number pad for a PIN of digits.
+- **Wrong exit PINs (agent 0.5.0):** 5 wrong PINs lock the exit for 1 minute, then each further 3 for 5 minutes, then
+  15 minutes, then 1 hour; after that every wrong PIN locks it for another hour (agents 0.3.6 to 0.4.x: 3 wrong PINs,
+  then every one, up to 1 hour). A new PIN, or **Clear PIN
+  lockout** on the device page, ends a lockout. A lockout under way when the agent updates is kept.
+- **Retry apply** sends the configuration again right away (`POST /rest/private/agent/v1/devices/{number}/retryConfig`,
+  in the audit log), instead of making the device check in, which after a failed apply waited an hour.
+- **Kiosk text colour (agent 0.5.0):** a kiosk text colour with less than 4.5:1 contrast on its background is
+  replaced on the device by a readable one, so some brand pairs show dark text (white on a bright red, for example).
+  The kiosk background is always drawn solid; its transparency is ignored. Check kiosk configurations whose text and
+  background colours are close.
 
 ### v0.4.0
 
@@ -150,7 +436,7 @@ The console is new: every page was rebuilt. This part is for everyone who runs M
 or add server plugins also read [v0.4.0 for forks](#v040-for-forks) below.
 
 - **Updating.** As the [table](#upgrading-mdmesh) at the top says: quick start, **Settings → Updates**; from source,
-  `git pull && ./setup.sh`; native, `git pull && sudo ./setup.sh --native`. There is nothing new to set: no new
+  `./setup.sh --update`; native, `sudo ./setup.sh --update --native`. There is nothing new to set: no new
   `.env` setting or server parameter, and no supervisor update.
 - **The database update is automatic.** On start, the server adds:
   - `configurations.extensions`, set to `{}` for every existing configuration;
@@ -168,10 +454,10 @@ or add server plugins also read [v0.4.0 for forks](#v040-for-forks) below.
   takes the new agent applies its configuration once more, as after every agent update; it changes nothing unless the
   configuration sets a connectivity mode.
 - **Configuration apps install at check-in.** An app added to a configuration, in the editor or with Deploy's "Add to
-  a configuration", now installs on its devices at their next check-in, without **Install config apps**, also on a
+  a configuration", now installs on its devices at their next check-in, without **Install configuration apps**, also on a
   device that was offline. A device moved to another configuration gets that configuration's apps it doesn't have. A
-  failed install is tried up to three times (after 15 minutes, then an hour), then left to Install config apps. Apps
-  a configuration had before the update are not sent again: use Install config apps for a device still missing one.
+  failed install is tried up to three times (after 15 minutes, then an hour), then left to Install configuration apps. Apps
+  a configuration had before the update are not sent again: use Install configuration apps for a device still missing one.
   It needs no new agent: every agent that can install silently (Device Owner) does it.
 - **Rolling back to 0.3.9 is safe.** A one-click rollback, and the restores in
   [Backups and restore](OPERATIONS.md#backups-and-restore), bring back the database from before the update,
@@ -297,8 +583,8 @@ plugin's screens to a console extension.
 ### v0.3.9
 
 A security release. Update every server. Devices need no new agent, and the supervisor is unchanged: quick-start
-installs apply it from **Settings → Updates**, from-source installs run `git pull && ./setup.sh`, and native installs
-`git pull && sudo ./setup.sh --native`.
+installs apply it from **Settings → Updates**, from-source installs run `./setup.sh --update`, and native installs
+`sudo ./setup.sh --update --native`.
 
 - **Sign-in limits.** Failed sign-ins are limited per address and per account, for the console, for API clients
   (`/rest/public/jwt/login`) and for the current-password check of a password or e-mail change. A browser or API
@@ -445,7 +731,7 @@ kiosk PINs.
     short), or airplane mode. Wi-Fi then stays on, shown as deferred, until the configuration changes.
   - The old Wi-Fi setting, now named **Wi-Fi settings**, still only locks the Wi-Fi settings screen.
 - **Lock volume buttons (kiosk)** (new, off by default; needs agent 0.3.4, and older agents ignore it) blocks volume
-  changes in kiosk. Android mutes a locked device, so **Ring device** is silent on it.
+  changes in kiosk. Android mutes a locked device, so **Ring** is silent on it.
 - **Lock hardware buttons** blocks only the power menu.
 - **Headwind QR routes:** `/rest/public/qr/*` returns 404 unless `LEGACY_DEVICE_API=1`; the console doesn't use
   them. The three installer-created configurations get a new QR key on first start. With `LEGACY_DEVICE_API=1`, the
@@ -463,8 +749,8 @@ kiosk PINs.
 - The Headwind launcher's device routes (`/rest/public/sync/*`, notifications, plugin device uploads, usage stats)
   return 404 unless `LEGACY_DEVICE_API=1`.
 - App installs now carry the APK's SHA-256, and current agents refuse an install without one. Hosted APKs are hashed
-  automatically. For a Library app with an external URL, add the hash with the **SHA-256…** button, or upload the
-  APK instead.
+  automatically. For a Library app with an external URL, add the hash with **Add checksum**, or **SHA-256 checksum**
+  in the app's row, or upload the APK instead.
 
 ### v0.3.1
 

@@ -185,6 +185,61 @@ public class DesiredConfigBuilderTest {
     }
 
     @Test
+    public void kiosk_background_image_requires_a_server_managed_file_and_hash() {
+        Configuration c = kioskConfig();
+        c.setBackgroundImageUrl("https://mdm.example/files/kiosk-background.jpg");
+        c.setBackgroundImageFileId(42);
+        c.setBackgroundImageSha256("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+
+        assertEquals("https://mdm.example/files/kiosk-background.jpg", build(c, Collections.emptyList())
+                .getKiosk().getTheme().getBackgroundImage().getUrl());
+        assertEquals("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", build(c, Collections.emptyList())
+                .getKiosk().getTheme().getBackgroundImage().getSha256());
+
+        c.setBackgroundImageSha256(null);
+        assertNull("a URL alone is a legacy value, not a managed image", build(c, Collections.emptyList())
+                .getKiosk().getTheme().getBackgroundImage());
+    }
+
+    private static Configuration managedImage() {
+        Configuration c = kioskConfig();
+        c.setBackgroundImageUrl("https://mdm.example/files/kiosk-background.jpg");
+        c.setBackgroundImageFileId(42);
+        c.setBackgroundImageSha256("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+        return c;
+    }
+
+    /** Protocol 1.10: fit and focal point are sent only when they aren't the defaults, so revisions don't move. */
+    @Test
+    public void kiosk_background_fit_and_focal_are_sent_only_when_not_the_default() {
+        String plain = build(managedImage(), Collections.emptyList()).getRevision();
+        Configuration defaults = managedImage();
+        defaults.setBackgroundImageFit("fill");
+        defaults.setBackgroundImageFocalX(0.5);
+        defaults.setBackgroundImageFocalY(0.5);
+        DesiredConfig d = build(defaults, Collections.emptyList());
+        assertEquals("defaults leave the document as it was", plain, d.getRevision());
+        assertNull(d.getKiosk().getTheme().getBackgroundImage().getFit());
+        assertNull(d.getKiosk().getTheme().getBackgroundImage().getFocalX());
+
+        Configuration focal = managedImage();
+        focal.setBackgroundImageFocalX(0.2);
+        focal.setBackgroundImageFocalY(0.9);
+        DesiredConfig f = build(focal, Collections.emptyList());
+        assertEquals(Double.valueOf(0.2), f.getKiosk().getTheme().getBackgroundImage().getFocalX());
+        assertEquals(Double.valueOf(0.9), f.getKiosk().getTheme().getBackgroundImage().getFocalY());
+        assertNull(f.getKiosk().getTheme().getBackgroundImage().getFit());
+
+        Configuration fit = managedImage();
+        fit.setBackgroundImageFit("fit");
+        fit.setBackgroundImageFocalX(0.2);
+        fit.setBackgroundImageFocalY(0.9);
+        DesiredConfig ft = build(fit, Collections.emptyList());
+        assertEquals("fit", ft.getKiosk().getTheme().getBackgroundImage().getFit());
+        assertNull("fit ignores the focal point", ft.getKiosk().getTheme().getBackgroundImage().getFocalX());
+    }
+
+    @Test
     public void factory_reset_is_inverted_into_the_blocking_policy() {
         // disableFactoryReset=true means "block the wipe", so the agent receives factoryReset=false.
         DesiredConfig blocked = build(policiesConfig(), Collections.emptyList());
@@ -201,6 +256,17 @@ public class DesiredConfigBuilderTest {
         Configuration unmanaged = policiesConfig(); unmanaged.setDisableFactoryReset(null);
         DesiredConfig d = build(unmanaged, Collections.emptyList());
         assertFalse("null disableFactoryReset = not managed", d.getPolicies().containsKey("factoryReset"));
+    }
+
+    @Test
+    public void camera_is_a_direct_allow_block_policy_and_null_is_unmanaged() {
+        Configuration c = policiesConfig();
+        c.setCamera(false);
+        assertEquals(Boolean.FALSE, build(c, Collections.emptyList()).getPolicies().get("camera"));
+        c.setCamera(true);
+        assertEquals(Boolean.TRUE, build(c, Collections.emptyList()).getPolicies().get("camera"));
+        c.setCamera(null);
+        assertFalse(build(c, Collections.emptyList()).getPolicies().containsKey("camera"));
     }
 
     @Test
@@ -277,6 +343,22 @@ public class DesiredConfigBuilderTest {
         // Existing configurations upgrade with a NULL column: the kiosk golden revision must not move.
         assertEquals(resource("desired-config-kiosk.sha256"),
                 build(kioskConfig(), Arrays.asList(app(5, 505, "com.acme.pos", 1))).getRevision());
+    }
+
+    @Test
+    public void location_services_is_its_own_tri_state_policy_not_location_reporting() {
+        Configuration legacy = policiesConfig();
+        legacy.setRequestUpdates(RequestUpdatesType.GPS);
+        assertFalse("null locationServices = services not managed", build(legacy, Collections.emptyList())
+                .getPolicies().containsKey("locationServices"));
+        assertEquals("GPS reporting stays active", "active", build(legacy, Collections.emptyList()).getLocation().getMode());
+
+        Configuration off = policiesConfig(); off.setLocationServices(false);
+        assertEquals(Boolean.FALSE, build(off, Collections.emptyList()).getPolicies().get("locationServices"));
+        assertEquals("telemetry mode is independent", "off", build(off, Collections.emptyList()).getLocation().getMode());
+
+        Configuration on = policiesConfig(); on.setLocationServices(true);
+        assertEquals(Boolean.TRUE, build(on, Collections.emptyList()).getPolicies().get("locationServices"));
     }
 
     @Test
